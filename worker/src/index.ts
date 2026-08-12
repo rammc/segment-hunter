@@ -15,6 +15,7 @@
      GET  /activities/:id          -> Aktivitaet inkl. Segment-Efforts
                                       (include_all_efforts Passthrough)
      GET  /activities/:id/streams  -> Watt/Zeit-Streams (keys Passthrough)
+     GET  /segments/explore        -> Top-Segmente in einer Bounding Box
      GET  /segments/:id            -> Segmentdetails (xoms, athlete_count)
      POST /coach                   -> AI-Taktikplan (nur mit ANTHROPIC_API_KEY)
 
@@ -238,6 +239,14 @@ export default {
       const activity = path.match(/^\/activities\/(\d+)$/);
       if (activity) {
         return await stravaGet(env, `/activities/${activity[1]}`, pick(url, ["include_all_efforts"]));
+      }
+
+      if (path === "/segments/explore") {
+        return await stravaGet(
+          env,
+          "/segments/explore",
+          pick(url, ["bounds", "activity_type", "min_cat", "max_cat"])
+        );
       }
 
       const segment = path.match(/^\/segments\/(\d+)$/);

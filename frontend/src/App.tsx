@@ -3,18 +3,26 @@ import { T, body, display, mono } from "./theme";
 import { StravaClient, ProxyError } from "./lib/strava";
 import {
   buildPowerCurve,
+  buildSpeedCurve,
   curveAt,
+  fmtPace,
   fmtTime,
   huntScore,
+  interpolateAt,
   komFeasibility,
   parseKomTime,
+  runFeasibility,
+  runHuntScore,
 } from "./lib/scoring";
 import type { StreamInput } from "./lib/scoring";
 import type {
   CoachTarget,
   CurvePoint,
   DetailedActivity,
+  Feasibility,
+  HuntScore,
   SegmentEntry,
+  Sport,
 } from "./lib/types";
 import { Crown } from "./components/Crown";
 import { Spinner } from "./components/Spinner";
@@ -22,11 +30,14 @@ import { ScoreDial } from "./components/ScoreDial";
 import { KomBadge } from "./components/KomBadge";
 import { Field } from "./components/Field";
 import { PowerCurve } from "./components/PowerCurve";
+import { SportToggle } from "./components/SportToggle";
+import { NearbySegments } from "./components/NearbySegments";
 
-/* Outdoor-Radaktivitaeten, wie im Prototyp */
+/* Outdoor-Aktivitaeten je Sportart */
 const RIDE_TYPES = new Set(["Ride", "GravelRide", "MountainBikeRide"]);
+const RUN_TYPES = new Set(["Run", "TrailRun"]);
 const MIN_DISTANCE_M = 2000;
-const MAX_RIDES = 8; // mehr als die 6 des Prototyps, Strava-Rate-Limit im Blick
+const MAX_ACTIVITIES = 8; // mehr als die 6 des Prototyps, Strava-Rate-Limit im Blick
 const MAX_KOM_LOOKUPS = 15;
 const ACTIVITY_CHUNK = 3;
 
@@ -38,8 +49,11 @@ interface Athlete {
   weight: number;
 }
 
+type ScoredSegment = SegmentEntry & HuntScore & { feas: Feasibility | null };
+
 export default function SegmentHunter() {
   const [phase, setPhase] = useState<Phase>("setup");
+  const [sport, setSport] = useState<Sport>("ride");
   const [step, setStep] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [athlete, setAthlete] = useState<Athlete | null>(null);
@@ -60,60 +74,71 @@ export default function SegmentHunter() {
 
   const weight = athlete?.weight || 71;
   const configured = proxyUrl.trim().length > 0;
+  const crLabel = sport === "ride" ? "KOM" : "CR";
 
   function makeClient(): StravaClient {
     return new StravaClient(proxyUrl, proxyKey);
   }
 
-  /* KOM-Zeiten fuer die aussichtsreichsten Segmente nachladen */
-  async function loadKomTimes(client: StravaClient, segList: SegmentEntry[], curvePoints: CurvePoint[]): Promise<SegmentEntry[]> {
-    setStep("Lade KOM-Zeiten über den Proxy …");
+  function scoreFor(seg: SegmentEntry, curvePoints: CurvePoint[], s: Sport): HuntScore {
+    return s === "ride" ? huntScore(seg, curvePoints) : runHuntScore(seg, curvePoints);
+  }
+
+  /* KOM/CR-Zeiten fuer die aussichtsreichsten Segmente nachladen */
+  async function loadKomTimes(
+    client: StravaClient,
+    segList: SegmentEntry[],
+    curvePoints: CurvePoint[],
+    s: Sport
+  ): Promise<SegmentEntry[]> {
+    setStep(`Lade ${s === "ride" ? "KOM" : "CR"}-Zeiten über den Proxy …`);
     // Erst grob nach Hunt-Score sortieren, damit die Lookups die Top-Segmente treffen
     const ranked = [...segList].sort(
-      (a, b) => huntScore(b, curvePoints).score - huntScore(a, curvePoints).score
+      (a, b) => scoreFor(b, curvePoints, s).score - scoreFor(a, curvePoints, s).score
     );
     const targets = ranked.slice(0, MAX_KOM_LOOKUPS);
     try {
       const results = await Promise.all(
-        targets.map(async (s) => {
+        targets.map(async (seg) => {
           try {
-            const d = await client.getSegment(s.id);
+            const d = await client.getSegment(seg.id);
             return {
-              id: s.id,
+              id: seg.id,
               komTime: parseKomTime(d?.xoms?.kom || d?.xoms?.overall),
               athleteCount: d?.athlete_count ?? null,
             };
           } catch (e) {
             if (e instanceof ProxyError && e.status === 401) throw e;
-            return { id: s.id, komTime: null, athleteCount: null };
+            return { id: seg.id, komTime: null, athleteCount: null };
           }
         })
       );
       const byId = new Map(results.map((r) => [r.id, r]));
-      const merged = segList.map((s) => {
-        const k = byId.get(s.id);
-        return k ? { ...s, komTime: k.komTime, athleteCount: k.athleteCount } : s;
+      const merged = segList.map((seg) => {
+        const k = byId.get(seg.id);
+        return k ? { ...seg, komTime: k.komTime, athleteCount: k.athleteCount } : seg;
       });
-      const found = merged.filter((s) => s.komTime).length;
+      const found = merged.filter((seg) => seg.komTime).length;
       setKomState("ok");
-      setKomMsg(`${found} von ${targets.length} KOM-Zeiten geladen.`);
+      setKomMsg(`${found} von ${targets.length} ${s === "ride" ? "KOM" : "CR"}-Zeiten geladen.`);
       return merged;
     } catch (e) {
       setKomState("error");
       setKomMsg(
         e instanceof ProxyError && e.status === 401
           ? "Proxy meldet 401: Proxy-Key prüfen."
-          : "KOM-Abruf über den Proxy fehlgeschlagen."
+          : "Abruf der Bestzeiten über den Proxy fehlgeschlagen."
       );
       return segList;
     }
   }
 
-  /* Kompletter Ladefluss, auch fuer "Aktualisieren" */
-  async function loadAll() {
+  /* Kompletter Ladefluss, auch fuer "Aktualisieren" und Sport-Wechsel */
+  async function loadAll(targetSport: Sport = sport) {
     setError(null);
     setAi(null);
     setKomMsg(null);
+    setKomState("off");
     const isRefresh = phase === "ready";
     if (isRefresh) setRefreshing(true);
     else setPhase("loading");
@@ -138,52 +163,71 @@ export default function SegmentHunter() {
       setAthlete({ name, weight: kg });
 
       setStep("Lade Aktivitäten …");
+      const wanted = targetSport === "ride" ? RIDE_TYPES : RUN_TYPES;
       const activities = await client.listActivities(30, 1);
-      const rides = activities
-        .filter((a) => RIDE_TYPES.has(a.type) || RIDE_TYPES.has(a.sport_type ?? ""))
+      const picked = activities
+        .filter((a) => wanted.has(a.type) || wanted.has(a.sport_type ?? ""))
         .filter((a) => a.distance > MIN_DISTANCE_M)
-        .slice(0, MAX_RIDES);
-      if (!rides.length) throw new Error("Keine Radaktivitäten gefunden.");
+        .slice(0, MAX_ACTIVITIES);
+      if (!picked.length) {
+        throw new Error(
+          targetSport === "ride" ? "Keine Radaktivitäten gefunden." : "Keine Läufe gefunden."
+        );
+      }
 
       const segMap = new Map<string, SegmentEntry>();
       const streams: StreamInput[] = [];
-      const effortPoints: CurvePoint[] = [];
+      const wattEffortPoints: CurvePoint[] = [];
+      const runEfforts: Array<{ distance: number; moving_time: number }> = [];
 
-      for (let i = 0; i < rides.length; i += ACTIVITY_CHUNK) {
-        const chunk = rides.slice(i, i + ACTIVITY_CHUNK);
+      for (let i = 0; i < picked.length; i += ACTIVITY_CHUNK) {
+        const chunk = picked.slice(i, i + ACTIVITY_CHUNK);
         setStep(
-          `Analysiere Fahrten ${i + 1}-${Math.min(i + chunk.length, rides.length)} von ${rides.length} …`
+          `Analysiere ${targetSport === "ride" ? "Fahrten" : "Läufe"} ${i + 1}-${Math.min(
+            i + chunk.length,
+            picked.length
+          )} von ${picked.length} …`
         );
         const loaded = await Promise.all(
-          chunk.map(async (r) => {
+          chunk.map(async (a) => {
             const [activity, streamSet] = await Promise.all([
-              client.getActivity(r.id),
-              client.getStreams(r.id),
+              client.getActivity(a.id),
+              targetSport === "ride" ? client.getStreams(a.id) : Promise.resolve(null),
             ]);
             return { activity, streamSet };
           })
         );
         for (const { activity, streamSet } of loaded) {
-          collectActivity(activity, segMap, effortPoints);
-          if (streamSet?.watts?.data?.length && streamSet?.time?.data?.length) {
-            streams.push({ time: streamSet.time.data, watts: streamSet.watts.data });
+          if (targetSport === "ride") {
+            collectRideActivity(activity, segMap, wattEffortPoints);
+            if (streamSet?.watts?.data?.length && streamSet?.time?.data?.length) {
+              streams.push({ time: streamSet.time.data, watts: streamSet.watts.data });
+            }
+          } else {
+            collectRunActivity(activity, segMap, runEfforts);
           }
         }
       }
 
-      setStep("Berechne Power-Kurve …");
-      const curvePoints = buildPowerCurve(streams, effortPoints);
+      setStep(targetSport === "ride" ? "Berechne Power-Kurve …" : "Berechne Pace-Kurve …");
+      const curvePoints =
+        targetSport === "ride"
+          ? buildPowerCurve(streams, wattEffortPoints)
+          : buildSpeedCurve(runEfforts);
       if (!curvePoints.length) {
         throw new Error(
-          "Keine Leistungsdaten gefunden. Ohne Watt-Werte (Powermeter oder Schätzung) kann nichts bewertet werden."
+          targetSport === "ride"
+            ? "Keine Leistungsdaten gefunden. Ohne Watt-Werte kann nichts bewertet werden."
+            : "Keine Lauf-Bestzeiten gefunden. Ohne Best Efforts kann nichts bewertet werden."
         );
       }
 
       let segList = [...segMap.values()];
-      segList = await loadKomTimes(client, segList, curvePoints);
+      segList = await loadKomTimes(client, segList, curvePoints, targetSport);
 
       setSegments(segList);
       setCurve(curvePoints);
+      setSport(targetSport);
       setPhase("ready");
       setStep("");
     } catch (e) {
@@ -192,6 +236,12 @@ export default function SegmentHunter() {
     } finally {
       setRefreshing(false);
     }
+  }
+
+  function switchSport(s: Sport) {
+    if (s === sport || refreshing) return;
+    setSport(s);
+    if (phase === "ready") void loadAll(s);
   }
 
   async function runAiAnalysis() {
@@ -221,11 +271,11 @@ export default function SegmentHunter() {
     }
   }
 
-  const scored = useMemo(() => {
+  const scored = useMemo<ScoredSegment[]>(() => {
     const list = segments.map((s) => ({
       ...s,
-      ...huntScore(s, curve),
-      feas: komFeasibility(s, curve),
+      ...(sport === "ride" ? huntScore(s, curve) : runHuntScore(s, curve)),
+      feas: sport === "ride" ? komFeasibility(s, curve) : runFeasibility(s, curve),
     }));
     return list.sort((a, b) => {
       const fa = a.feas?.ratio ?? -1;
@@ -233,9 +283,9 @@ export default function SegmentHunter() {
       if (komState === "ok" && fa !== fb) return fb - fa;
       return b.score - a.score;
     });
-  }, [segments, curve, komState]);
+  }, [segments, curve, komState, sport]);
 
-  const wkg5 = curveAt(curve, 300);
+  const fiveMin = sport === "ride" ? curveAt(curve, 300) : interpolateAt(curve, 300);
   const attackable = scored.filter(
     (s) => s.feas && (s.feas.status === "attack" || s.feas.status === "kom")
   ).length;
@@ -273,30 +323,35 @@ export default function SegmentHunter() {
               </h1>
             </div>
             <p style={{ color: T.dim, margin: "6px 0 0", fontSize: 14, maxWidth: 560 }}>
-              KOM-Zeiten gegen deine Power-Kurve: sehen, wo der Angriff realistisch ist.
+              {sport === "ride"
+                ? "KOM-Zeiten gegen deine Power-Kurve: sehen, wo der Angriff realistisch ist."
+                : "CR-Zeiten gegen deine Pace-Kurve: sehen, wo der Angriff realistisch ist."}
             </p>
           </div>
-          {phase === "ready" && (
-            <button
-              onClick={loadAll}
-              disabled={refreshing}
-              style={{
-                ...display,
-                background: "transparent",
-                color: T.gold,
-                border: `1px solid ${T.gold}`,
-                borderRadius: 8,
-                padding: "10px 18px",
-                fontSize: 15,
-                fontWeight: 700,
-                letterSpacing: 0.5,
-                cursor: refreshing ? "wait" : "pointer",
-                textTransform: "uppercase",
-              }}
-            >
-              {refreshing ? "Aktualisiere …" : "↻ Aktualisieren"}
-            </button>
-          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <SportToggle sport={sport} onChange={switchSport} disabled={refreshing || phase === "loading"} />
+            {phase === "ready" && (
+              <button
+                onClick={() => loadAll()}
+                disabled={refreshing}
+                style={{
+                  ...display,
+                  background: "transparent",
+                  color: T.gold,
+                  border: `1px solid ${T.gold}`,
+                  borderRadius: 8,
+                  padding: "10px 18px",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  letterSpacing: 0.5,
+                  cursor: refreshing ? "wait" : "pointer",
+                  textTransform: "uppercase",
+                }}
+              >
+                {refreshing ? "Aktualisiere …" : "↻ Aktualisieren"}
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -347,7 +402,7 @@ export default function SegmentHunter() {
               />
             </div>
             <button
-              onClick={loadAll}
+              onClick={() => loadAll()}
               disabled={!configured}
               style={{
                 ...display,
@@ -406,9 +461,7 @@ export default function SegmentHunter() {
               </div>
             )}
 
-            {error && (
-              <p style={{ color: T.red, marginTop: 0 }}>{error}</p>
-            )}
+            {error && <p style={{ color: T.red, marginTop: 0 }}>{error}</p>}
 
             {/* Athleten-Leiste */}
             <section style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
@@ -416,9 +469,16 @@ export default function SegmentHunter() {
                 [
                   ["Athlet", athlete?.name],
                   ["Gewicht", `${weight} kg`],
-                  wkg5 ? ["5-min-Power", `${wkg5} W · ${(wkg5 / weight).toFixed(1)} W/kg`] : null,
+                  fiveMin
+                    ? [
+                        sport === "ride" ? "5-min-Power" : "5-min-Pace",
+                        sport === "ride"
+                          ? `${fiveMin} W · ${(fiveMin / weight).toFixed(1)} W/kg`
+                          : fmtPace(fiveMin),
+                      ]
+                    : null,
                   ["Segmente", scored.length],
-                  komState === "ok" ? ["KOM in Reichweite", attackable] : null,
+                  komState === "ok" ? [`${crLabel} in Reichweite`, attackable] : null,
                 ] as Array<[string, string | number | undefined] | null>
               )
                 .filter((x): x is [string, string | number | undefined] => Boolean(x))
@@ -447,7 +507,7 @@ export default function SegmentHunter() {
                 ))}
             </section>
 
-            {/* KOM-Status */}
+            {/* KOM/CR-Status */}
             <section
               style={{
                 background: T.panel,
@@ -470,14 +530,18 @@ export default function SegmentHunter() {
                   color: komState === "ok" ? T.gold : komState === "error" ? T.red : T.dim,
                 }}
               >
-                KOM-Modus: {komState === "ok" ? "aktiv" : komState === "error" ? "Fehler" : "aus"}
+                {crLabel}-Modus:{" "}
+                {komState === "ok" ? "aktiv" : komState === "error" ? "Fehler" : "aus"}
               </span>
               <span style={{ color: komState === "error" ? T.red : T.dim, fontSize: 14 }}>
                 {komMsg || ""}
               </span>
             </section>
 
-            {/* Power-Kurve */}
+            {/* Standort: Segmente in der Naehe */}
+            <NearbySegments makeClient={makeClient} curve={curve} sport={sport} weight={weight} />
+
+            {/* Power-/Pace-Kurve */}
             <section
               style={{
                 background: T.panel,
@@ -497,9 +561,11 @@ export default function SegmentHunter() {
                   color: T.dim,
                 }}
               >
-                Power-Kurve (Bestwerte der analysierten Fahrten)
+                {sport === "ride"
+                  ? "Power-Kurve (Bestwerte der analysierten Fahrten)"
+                  : "Pace-Kurve (Best Efforts der analysierten Läufe)"}
               </h2>
-              <PowerCurve curve={curve} weight={weight} />
+              <PowerCurve curve={curve} weight={weight} sport={sport} />
             </section>
 
             {/* Hunt-Liste */}
@@ -525,7 +591,7 @@ export default function SegmentHunter() {
                 >
                   Angriffsziele
                 </h2>
-                {coachAvailable && (
+                {coachAvailable && sport === "ride" && (
                   <button
                     onClick={runAiAnalysis}
                     disabled={aiBusy}
@@ -609,7 +675,9 @@ export default function SegmentHunter() {
                   >
                     <ScoreDial score={s.score} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div
+                        style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+                      >
                         <span style={{ fontWeight: 600, fontSize: 16 }}>{s.name}</span>
                         {s.rank != null && s.rank <= 10 && <Crown size={14} />}
                         <KomBadge feas={s.feas} />
@@ -628,23 +696,37 @@ export default function SegmentHunter() {
                         <span>{(s.dist / 1000).toFixed(2)} km</span>
                         <span>{s.elev} hm</span>
                         <span>PB {fmtTime(s.time)}</span>
-                        <span>{s.watts > 30 ? `${s.watts} W` : "- W"}</span>
-                        {s.rank != null && <span style={{ color: T.gold }}>KOM-Rang {s.rank}</span>}
+                        <span>
+                          {sport === "ride"
+                            ? s.watts > 30
+                              ? `${s.watts} W`
+                              : "- W"
+                            : fmtPace(s.time > 0 ? s.dist / s.time : null)}
+                        </span>
+                        {s.rank != null && (
+                          <span style={{ color: T.gold }}>
+                            {crLabel}-Rang {s.rank}
+                          </span>
+                        )}
                         {s.prRank != null && s.rank == null && (
                           <span style={{ color: T.gold }}>PR-Rang {s.prRank}</span>
                         )}
                         {s.komTime && s.komTime < s.time && (
                           <span style={{ color: T.gold }}>
-                            KOM {fmtTime(s.komTime)} (−{fmtTime(s.time - s.komTime)})
+                            {crLabel} {fmtTime(s.komTime)} (−{fmtTime(s.time - s.komTime)})
                           </span>
                         )}
-                        {s.feas?.need && (
+                        {s.feas?.need != null && s.feas?.have != null && s.feas.status !== "kom" && (
                           <span style={{ color: s.feas.status === "attack" ? T.gold : T.teal }}>
-                            benötigt ≈{s.feas.need} W, du hast {s.feas.have} W
+                            {sport === "ride"
+                              ? `benötigt ≈${Math.round(s.feas.need)} W, du hast ${Math.round(s.feas.have)} W`
+                              : `benötigt ${fmtPace(s.feas.need)}, du kannst ${fmtPace(s.feas.have)}`}
                           </span>
                         )}
-                        {!s.feas && s.ref && s.reliable && s.ref > s.watts && (
-                          <span style={{ color: T.teal }}>Reserve +{s.ref - s.watts} W</span>
+                        {!s.feas && s.ref && s.reliable && sport === "ride" && s.ref > s.watts && (
+                          <span style={{ color: T.teal }}>
+                            Reserve +{Math.round(s.ref - s.watts)} W
+                          </span>
                         )}
                         {!s.reliable && (
                           <span style={{ color: T.faint }}>[geringe Datenqualität]</span>
@@ -666,12 +748,25 @@ export default function SegmentHunter() {
             </section>
 
             <footer style={{ color: T.faint, fontSize: 12, marginTop: 20, lineHeight: 1.6 }}>
-              Hunt-Score = Reserve deiner Power-Kurve auf der Segmentdauer (70 %) plus Rang-Bonus
-              (30 %). KOM-Machbarkeit = Power-Kurve auf der KOM-Dauer geteilt durch benötigte Watt
-              (Schätzung: P∝v bei Steigung ≥5 %, P∝v²·⁷ im Flachen, dazwischen geblendet; Wind,
-              Aero-Position und Taktik sind nicht modelliert). Datenquellen: Segment-Efforts und
-              Watt-Streams über den eigenen Proxy (Strava v3), KOM-Zeiten aus den Segmentdetails
-              (xoms).
+              {sport === "ride" ? (
+                <>
+                  Hunt-Score = Reserve deiner Power-Kurve auf der Segmentdauer (70 %) plus
+                  Rang-Bonus (30 %). KOM-Machbarkeit = Power-Kurve auf der KOM-Dauer geteilt durch
+                  benötigte Watt (Schätzung: P∝v bei Steigung ≥5 %, P∝v²·⁷ im Flachen, dazwischen
+                  geblendet; Wind, Aero-Position und Taktik sind nicht modelliert). Datenquellen:
+                  Segment-Efforts und Watt-Streams über den eigenen Proxy (Strava v3), KOM-Zeiten
+                  aus den Segmentdetails (xoms).
+                </>
+              ) : (
+                <>
+                  Hunt-Score = Reserve deiner Pace-Kurve auf der Segmentdauer (70 %) plus
+                  Rang-Bonus (30 %). CR-Machbarkeit = deine interpolierte Geschwindigkeit auf der
+                  CR-Dauer geteilt durch die benötigte Geschwindigkeit (Distanz durch CR-Zeit).
+                  Steigung ist beim Laufen nicht modelliert; bergige Segmente werden daher
+                  überschätzt. Datenquellen: Best Efforts und Segment-Efforts über den eigenen
+                  Proxy (Strava v3), CR-Zeiten aus den Segmentdetails (xoms).
+                </>
+              )}
             </footer>
           </>
         )}
@@ -680,8 +775,8 @@ export default function SegmentHunter() {
   );
 }
 
-/* Segment-Efforts und Kurvenpunkte aus einer Aktivitaet einsammeln */
-function collectActivity(
+/* Segment-Efforts und Kurvenpunkte aus einer Radaktivitaet einsammeln */
+function collectRideActivity(
   activity: DetailedActivity,
   segMap: Map<string, SegmentEntry>,
   effortPoints: CurvePoint[]
@@ -689,30 +784,8 @@ function collectActivity(
   for (const effort of activity.segment_efforts ?? []) {
     const seg = effort.segment;
     if (!seg) continue;
-    const key = String(seg.id);
-    const prev = segMap.get(key);
     const watts = Math.round(effort.average_watts || 0);
-    const entry: SegmentEntry = {
-      id: key,
-      name: seg.name || effort.name,
-      dist: Math.round(seg.distance),
-      elev: Math.round(Math.max(0, seg.elevation_high - seg.elevation_low) * 10) / 10,
-      time: Math.round(effort.moving_time),
-      watts,
-      rank: effort.kom_rank ?? prev?.rank ?? null,
-      prRank: effort.pr_rank ?? prev?.prRank ?? null,
-      efforts: (prev?.efforts || 0) + 1,
-    };
-    if (!prev || entry.time < prev.time) {
-      segMap.set(key, { ...prev, ...entry });
-    } else {
-      segMap.set(key, {
-        ...prev,
-        efforts: entry.efforts,
-        rank: entry.rank ?? prev.rank,
-        prRank: entry.prRank ?? prev.prRank,
-      });
-    }
+    mergeSegmentEntry(segMap, effort, watts);
     // Effort als Kurvenpunkt (Untergrenze), falls plausible Watt vorliegen
     if (watts > 30 && effort.moving_time >= 30) {
       effortPoints.push([Math.round(effort.moving_time), watts]);
@@ -722,5 +795,57 @@ function collectActivity(
   const actWatts = Math.round(activity.weighted_average_watts || activity.average_watts || 0);
   if (actWatts > 30 && activity.moving_time >= 300) {
     effortPoints.push([Math.round(activity.moving_time), actWatts]);
+  }
+}
+
+/* Segment-Efforts und Pace-Punkte aus einem Lauf einsammeln */
+function collectRunActivity(
+  activity: DetailedActivity,
+  segMap: Map<string, SegmentEntry>,
+  runEfforts: Array<{ distance: number; moving_time: number }>
+) {
+  for (const be of activity.best_efforts ?? []) {
+    runEfforts.push({ distance: be.distance, moving_time: be.moving_time });
+  }
+  for (const effort of activity.segment_efforts ?? []) {
+    const seg = effort.segment;
+    if (!seg) continue;
+    mergeSegmentEntry(segMap, effort, 0);
+    runEfforts.push({ distance: seg.distance, moving_time: effort.moving_time });
+  }
+  // Gesamtlauf als langer Pace-Punkt
+  if (activity.distance > 0 && activity.moving_time > 0) {
+    runEfforts.push({ distance: activity.distance, moving_time: activity.moving_time });
+  }
+}
+
+function mergeSegmentEntry(
+  segMap: Map<string, SegmentEntry>,
+  effort: NonNullable<DetailedActivity["segment_efforts"]>[number],
+  watts: number
+) {
+  const seg = effort.segment;
+  const key = String(seg.id);
+  const prev = segMap.get(key);
+  const entry: SegmentEntry = {
+    id: key,
+    name: seg.name || effort.name,
+    dist: Math.round(seg.distance),
+    elev: Math.round(Math.max(0, seg.elevation_high - seg.elevation_low) * 10) / 10,
+    time: Math.round(effort.moving_time),
+    watts,
+    rank: effort.kom_rank ?? prev?.rank ?? null,
+    prRank: effort.pr_rank ?? prev?.prRank ?? null,
+    efforts: (prev?.efforts || 0) + 1,
+  };
+  if (!prev || entry.time < prev.time) {
+    segMap.set(key, { ...prev, ...entry });
+  } else {
+    segMap.set(key, {
+      ...prev,
+      efforts: entry.efforts,
+      rank: entry.rank ?? prev.rank,
+      prRank: entry.prRank ?? prev.prRank,
+    });
   }
 }

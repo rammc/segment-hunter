@@ -1,8 +1,17 @@
 import { T, mono } from "../theme";
-import { fmtTime } from "../lib/scoring";
-import type { CurvePoint } from "../lib/types";
+import { fmtPace, fmtTime } from "../lib/scoring";
+import type { CurvePoint, Sport } from "../lib/types";
 
-export function PowerCurve({ curve, weight }: { curve: CurvePoint[]; weight: number }) {
+/** Rad: Watt ueber Dauer. Laufen: Geschwindigkeit (angezeigt als Pace) ueber Dauer. */
+export function PowerCurve({
+  curve,
+  weight,
+  sport = "ride",
+}: {
+  curve: CurvePoint[];
+  weight: number;
+  sport?: Sport;
+}) {
   if (!curve.length) return null;
   const sorted = [...curve].sort((a, b) => a[0] - b[0]);
   const W = 560,
@@ -21,12 +30,16 @@ export function PowerCurve({ curve, weight }: { curve: CurvePoint[]; weight: num
   const ticks = [5, 30, 120, 600, 3600].filter(
     (s) => s >= sorted[0][0] && s <= sorted[sorted.length - 1][0]
   );
+  const label = (s: number, w: number) =>
+    sport === "ride"
+      ? `${fmtTime(s)}: ${Math.round(w)} W (${(w / weight).toFixed(1)} W/kg)`
+      : `${fmtTime(s)}: ${fmtPace(w)}`;
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
       style={{ width: "100%", height: "auto" }}
       role="img"
-      aria-label="Power-Kurve"
+      aria-label={sport === "ride" ? "Power-Kurve" : "Pace-Kurve"}
     >
       {ticks.map((s) => (
         <g key={s}>
@@ -39,7 +52,7 @@ export function PowerCurve({ curve, weight }: { curve: CurvePoint[]; weight: num
       <path d={path} stroke={T.gold} strokeWidth="2.5" fill="none" />
       {sorted.map(([s, w]) => (
         <circle key={s} cx={px(s)} cy={py(w)} r="3" fill={T.bg} stroke={T.gold} strokeWidth="2">
-          <title>{`${fmtTime(s)}: ${w} W (${(w / weight).toFixed(1)} W/kg)`}</title>
+          <title>{label(s, w)}</title>
         </circle>
       ))}
     </svg>

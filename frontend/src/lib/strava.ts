@@ -3,6 +3,7 @@ import type {
   CurvePoint,
   DetailedActivity,
   DetailedSegment,
+  ExplorerSegment,
   StravaAthlete,
   StreamSet,
   SummaryActivity,
@@ -120,6 +121,18 @@ export class StravaClient {
 
   getSegment(id: string | number): Promise<DetailedSegment> {
     return this.get<DetailedSegment>(`/segments/${id}`);
+  }
+
+  /** Top-Segmente in einer Bounding Box (sw_lat,sw_lng,ne_lat,ne_lng) */
+  async exploreSegments(
+    bounds: [number, number, number, number],
+    activityType: "riding" | "running"
+  ): Promise<ExplorerSegment[]> {
+    const res = await this.get<{ segments?: ExplorerSegment[] }>("/segments/explore", {
+      bounds: bounds.map((b) => b.toFixed(5)).join(","),
+      activity_type: activityType,
+    });
+    return res.segments ?? [];
   }
 
   async coach(payload: {

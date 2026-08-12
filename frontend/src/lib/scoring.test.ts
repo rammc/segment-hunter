@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPowerCurve,
+  buildSpeedCurve,
   curveAt,
+  fmtPace,
   fmtTime,
   huntScore,
+  interpolateAt,
   komFeasibility,
   maxAvgPower,
   parseKomTime,
+  physicsKomWatts,
   requiredWattsForKom,
+  runFeasibility,
+  runHuntScore,
 } from "./scoring";
 import type { CurvePoint } from "./types";
 
@@ -232,5 +238,141 @@ describe("buildPowerCurve", () => {
   it("ignoriert unplausible Punkte", () => {
     const curve = buildPowerCurve([], [[0, 300], [60, 0], [-5, 100], [120, NaN as unknown as number]]);
     expect(curve).toEqual([]);
+  });
+});
+
+/* ---------- Laufen ---------- */
+
+// Pace-Kurve: 400 m in 80 s (5 m/s), 1 km in 220 s (~4.55 m/s),
+// 5 km in 1250 s (4 m/s), 10 km in 2700 s (~3.7 m/s)
+const RUN_EFFORTS = [
+  { distance: 400, moving_time: 80 },
+  { distance: 1000, moving_time: 220 },
+  { distance: 5000, moving_time: 1250 },
+  { distance: 10000, moving_time: 2700 },
+];
+
+describe("buildSpeedCurve", () => {
+  it("baut eine monoton fallende Geschwindigkeitskurve", () => {
+    const curve = buildSpeedCurve(RUN_EFFORTS);
+    expect(curve.length).toBe(4);
+    for (let i = 0; i < curve.length - 1; i++) {
+      expect(curve[i][1]).toBeGreaterThanOrEqual(curve[i + 1][1]);
+    }
+    expect(curve[0]).toEqual([80, 5]);
+  });
+
+  it("filtert zu kurze und zu langsame Datenpunkte", () => {
+    const curve = buildSpeedCurve([
+      { distance: 100, moving_time: 15 }, // zu kurz (Zeit und Distanz)
+      { distance: 150, moving_time: 40 }, // Distanz unter Minimum
+      { distance: 1000, moving_time: 240 },
+    ]);
+    expect(curve).toEqual([[240, 1000 / 240]]);
+  });
+
+  it("nimmt bei gleicher Dauer den schnelleren Punkt", () => {
+    const curve = buildSpeedCurve([
+      { distance: 1000, moving_time: 240 },
+      { distance: 1100, moving_time: 240 },
+    ]);
+    expect(curve).toEqual([[240, 1100 / 240]]);
+  });
+});
+
+describe("interpolateAt", () => {
+  it("liefert unrundete Werte fuer Pace-Kurven", () => {
+    const curve = buildSpeedCurve(RUN_EFFORTS);
+    const v = interpolateAt(curve, 600)!;
+    expect(v).toBeGreaterThan(4); // schneller als 5-km-Pace
+    expect(v).toBeLessThan(1000 / 220); // langsamer als 1-km-Pace
+    expect(Number.isInteger(v)).toBe(false);
+  });
+});
+
+describe("runHuntScore", () => {
+  const curve = buildSpeedCurve(RUN_EFFORTS);
+
+  it("belohnt Reserve gegenueber der Pace-Kurve", () => {
+    // Segment 1 km in 300 s (3.33 m/s), Kurve kann dort deutlich mehr
+    const slow = runHuntScore({ time: 300, dist: 1000, rank: null }, curve);
+    const fast = runHuntScore({ time: 220, dist: 1000, rank: null }, curve);
+    expect(slow.score).toBeGreaterThan(fast.score);
+  });
+
+  it("markiert zu kurze Efforts als unzuverlaessig", () => {
+    expect(runHuntScore({ time: 20, dist: 100, rank: null }, curve).reliable).toBe(false);
+    expect(runHuntScore({ time: 300, dist: 1000, rank: null }, curve).reliable).toBe(true);
+  });
+});
+
+describe("runFeasibility", () => {
+  const curve = buildSpeedCurve(RUN_EFFORTS);
+
+  it("erkennt gehaltene CRs", () => {
+    const f = runFeasibility({ dist: 1000, time: 220, komTime: 220 }, curve)!;
+    expect(f.status).toBe("kom");
+  });
+
+  it("vergleicht benoetigte mit verfuegbarer Geschwindigkeit", () => {
+    // CR 1 km in 225 s: benoetigt ~4.44 m/s, Kurve kann dort ~4.5 m/s
+    const f = runFeasibility({ dist: 1000, time: 300, komTime: 225 }, curve)!;
+    expect(f.status).toBe("attack");
+    expect(f.need).toBeCloseTo(1000 / 225, 3);
+    expect(f.ratio).toBeGreaterThanOrEqual(0.97);
+
+    // CR unrealistisch schnell
+    const far = runFeasibility({ dist: 1000, time: 300, komTime: 150 }, curve)!;
+    expect(far.status).toBe("far");
+  });
+
+  it("funktioniert auch ohne eigene Zeit (time 0, z. B. Explore)", () => {
+    const f = runFeasibility({ dist: 1000, time: 0, komTime: 225 }, curve)!;
+    expect(f.status).toBe("attack");
+    expect(f.gap).toBeUndefined();
+  });
+
+  it("gibt null ohne CR-Zeit oder ohne Kurve", () => {
+    expect(runFeasibility({ dist: 1000, time: 300, komTime: null }, curve)).toBeNull();
+    expect(runFeasibility({ dist: 1000, time: 300, komTime: 225 }, [])).toBeNull();
+  });
+});
+
+describe("fmtPace", () => {
+  it("formatiert m/s als min/km", () => {
+    expect(fmtPace(1000 / 240)).toBe("4:00 /km");
+    expect(fmtPace(1000 / 272)).toBe("4:32 /km");
+  });
+  it("gibt Platzhalter fuer fehlende Werte", () => {
+    expect(fmtPace(null)).toBe("-");
+    expect(fmtPace(0)).toBe("-");
+  });
+});
+
+describe("physicsKomWatts", () => {
+  it("liefert plausible Werte fuer einen Anstieg", () => {
+    // 5 km, 400 hm (8 %), KOM 20 min, 71 kg: dominiert von der Steigleistung
+    const w = physicsKomWatts(5000, 400, 1200, 71)!;
+    // reine Steigleistung: 80 kg * 9.81 * 400 m / 1200 s = ~262 W, plus Roll/Aero
+    expect(w).toBeGreaterThan(270);
+    expect(w).toBeLessThan(340);
+  });
+
+  it("liefert plausible Werte im Flachen (Aero dominiert)", () => {
+    // 5 km flach, KOM 6 min = 50 km/h: braucht deutlich ueber 400 W
+    const w = physicsKomWatts(5000, 0, 360, 71)!;
+    expect(w).toBeGreaterThan(400);
+  });
+
+  it("skaliert mit dem Gewicht am Berg", () => {
+    const light = physicsKomWatts(5000, 400, 1200, 60)!;
+    const heavy = physicsKomWatts(5000, 400, 1200, 90)!;
+    expect(heavy).toBeGreaterThan(light);
+  });
+
+  it("gibt null fuer unplausible Eingaben", () => {
+    expect(physicsKomWatts(0, 100, 600, 71)).toBeNull();
+    expect(physicsKomWatts(5000, 0, 0, 71)).toBeNull();
+    expect(physicsKomWatts(5000, 0, 600, 0)).toBeNull();
   });
 });

@@ -39,12 +39,31 @@ export interface SegmentEffort {
   segment: SummarySegment;
 }
 
+export interface BestEffort {
+  name: string; // "400m", "1k", "5k", ...
+  distance: number; // m
+  moving_time: number; // s
+  elapsed_time: number;
+}
+
 export interface DetailedActivity extends SummaryActivity {
   segment_efforts?: SegmentEffort[];
+  best_efforts?: BestEffort[]; // nur bei Laeufen
   average_watts?: number;
   weighted_average_watts?: number;
   moving_time: number;
   device_watts?: boolean;
+}
+
+/** Ergebnis von GET /segments/explore */
+export interface ExplorerSegment {
+  id: number;
+  name: string;
+  distance: number; // m
+  avg_grade: number; // %
+  elev_difference: number; // m, immer >= 0
+  climb_category: number;
+  starred?: boolean;
 }
 
 export interface StreamSet {
@@ -61,7 +80,9 @@ export interface DetailedSegment {
 
 /* ---------- App-Modelle ---------- */
 
-/** [Dauer in Sekunden, Watt] */
+export type Sport = "ride" | "run";
+
+/** [Dauer in Sekunden, Wert]: Watt beim Rad, Geschwindigkeit in m/s beim Laufen */
 export type CurvePoint = [number, number];
 
 export interface SegmentEntry {

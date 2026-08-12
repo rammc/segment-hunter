@@ -201,6 +201,20 @@ export function buildPowerCurve(
   return points as CurvePoint[];
 }
 
+/**
+ * FTP aus dem Strava-Profil als Kurven-Stuetzstellen: FTP entspricht etwa der
+ * Stundenleistung, die 20-Minuten-Leistung liegt bei etwa FTP / 0.95. Das
+ * verankert die Kurve in dem Dauerbereich, in dem die meisten KOM-Zeiten
+ * liegen, auch wenn die analysierten Fahrten locker waren.
+ */
+export function ftpCurvePoints(ftp: number | null | undefined): CurvePoint[] {
+  if (!ftp || !Number.isFinite(ftp) || ftp < 50 || ftp > 600) return [];
+  return [
+    [1200, Math.round(ftp / 0.95)],
+    [3600, Math.round(ftp)],
+  ];
+}
+
 /* ---------- Laufen: Pace-Kurve aus Best Efforts ---------- */
 
 /** Mindestdistanz, ab der ein Lauf-Effort als aussagekraeftig gilt */

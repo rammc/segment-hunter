@@ -7,6 +7,7 @@ import {
   curveAt,
   fmtPace,
   fmtTime,
+  ftpCurvePoints,
   huntScore,
   interpolateAt,
   komFeasibility,
@@ -23,6 +24,7 @@ import type {
   HuntScore,
   SegmentEntry,
   Sport,
+  SummaryActivity,
 } from "./lib/types";
 import { Crown } from "./components/Crown";
 import { Spinner } from "./components/Spinner";
@@ -37,7 +39,9 @@ import { NearbySegments } from "./components/NearbySegments";
 const RIDE_TYPES = new Set(["Ride", "GravelRide", "MountainBikeRide"]);
 const RUN_TYPES = new Set(["Run", "TrailRun"]);
 const MIN_DISTANCE_M = 2000;
-const MAX_ACTIVITIES = 8; // mehr als die 6 des Prototyps, Strava-Rate-Limit im Blick
+const ACTIVITY_WINDOW = 60; // so viele juengste Aktivitaeten kommen als Kandidaten infrage
+const MAX_ACTIVITIES = 12; // davon werden die aussichtsreichsten analysiert
+const ALWAYS_RECENT = 3; // die juengsten passenden Aktivitaeten sind immer dabei
 const MAX_KOM_LOOKUPS = 15;
 const ACTIVITY_CHUNK = 3;
 
@@ -47,6 +51,7 @@ type KomState = "off" | "ok" | "error";
 interface Athlete {
   name: string;
   weight: number;
+  ftp: number | null;
 }
 
 type ScoredSegment = SegmentEntry & HuntScore & { feas: Feasibility | null };
@@ -153,22 +158,21 @@ export default function SegmentHunter() {
       setStep("Lade Athletenprofil …");
       let name = "Athlet";
       let kg = 71;
+      let ftp: number | null = null;
       try {
         const a = await client.getAthlete();
         name = [a.firstname, a.lastname].filter(Boolean).join(" ") || name;
         if (a.weight && a.weight > 30) kg = a.weight;
+        if (a.ftp && a.ftp > 0) ftp = a.ftp;
       } catch {
         // Profil ist optional, Defaults reichen
       }
-      setAthlete({ name, weight: kg });
+      setAthlete({ name, weight: kg, ftp });
 
       setStep("Lade Aktivitäten …");
       const wanted = targetSport === "ride" ? RIDE_TYPES : RUN_TYPES;
-      const activities = await client.listActivities(30, 1);
-      const picked = activities
-        .filter((a) => wanted.has(a.type) || wanted.has(a.sport_type ?? ""))
-        .filter((a) => a.distance > MIN_DISTANCE_M)
-        .slice(0, MAX_ACTIVITIES);
+      const activities = await client.listActivities(ACTIVITY_WINDOW, 1);
+      const picked = pickActivities(activities, wanted, targetSport);
       if (!picked.length) {
         throw new Error(
           targetSport === "ride" ? "Keine Radaktivitäten gefunden." : "Keine Läufe gefunden."
@@ -212,7 +216,7 @@ export default function SegmentHunter() {
       setStep(targetSport === "ride" ? "Berechne Power-Kurve …" : "Berechne Pace-Kurve …");
       const curvePoints =
         targetSport === "ride"
-          ? buildPowerCurve(streams, wattEffortPoints)
+          ? buildPowerCurve(streams, [...wattEffortPoints, ...ftpCurvePoints(ftp)])
           : buildSpeedCurve(runEfforts);
       if (!curvePoints.length) {
         throw new Error(
@@ -469,6 +473,7 @@ export default function SegmentHunter() {
                 [
                   ["Athlet", athlete?.name],
                   ["Gewicht", `${weight} kg`],
+                  sport === "ride" && athlete?.ftp ? ["FTP", `${athlete.ftp} W`] : null,
                   fiveMin
                     ? [
                         sport === "ride" ? "5-min-Power" : "5-min-Pace",
@@ -755,7 +760,9 @@ export default function SegmentHunter() {
                   benötigte Watt (Schätzung: P∝v bei Steigung ≥5 %, P∝v²·⁷ im Flachen, dazwischen
                   geblendet; Wind, Aero-Position und Taktik sind nicht modelliert). Datenquellen:
                   Segment-Efforts und Watt-Streams über den eigenen Proxy (Strava v3), KOM-Zeiten
-                  aus den Segmentdetails (xoms).
+                  aus den Segmentdetails (xoms). Analysiert werden die härtesten und jüngsten der
+                  letzten {ACTIVITY_WINDOW} Aktivitäten; das FTP aus deinem Strava-Profil verankert
+                  die Kurve bei 20 und 60 Minuten.
                 </>
               ) : (
                 <>
@@ -773,6 +780,36 @@ export default function SegmentHunter() {
       </main>
     </div>
   );
+}
+
+/**
+ * Aus dem Kandidatenfenster die aussichtsreichsten Aktivitaeten auswaehlen:
+ * die juengsten sind immer dabei (aktuelle Form), der Rest wird nach
+ * Bestleistungs-Signalen sortiert (PRs, Achievements, hohe Durchschnitts-
+ * leistung bzw. -geschwindigkeit, Suffer Score). So landen die harten
+ * Einheiten in der Kurve statt nur der letzten lockeren Ausfahrten.
+ */
+function pickActivities(
+  all: SummaryActivity[],
+  wanted: Set<string>,
+  sport: Sport
+): SummaryActivity[] {
+  const eligible = all
+    .filter((a) => wanted.has(a.type) || wanted.has(a.sport_type ?? ""))
+    .filter((a) => a.distance > MIN_DISTANCE_M);
+  const recent = eligible.slice(0, ALWAYS_RECENT);
+  const signal = (a: SummaryActivity) =>
+    (a.pr_count ?? 0) * 20 +
+    (a.achievement_count ?? 0) * 2 +
+    (a.suffer_score ?? 0) / 10 +
+    (sport === "ride" ? (a.average_watts ?? 0) / 5 : (a.average_speed ?? 0) * 10);
+  const rest = eligible.slice(ALWAYS_RECENT).sort((a, b) => signal(b) - signal(a));
+  const chosen = [...recent];
+  for (const a of rest) {
+    if (chosen.length >= MAX_ACTIVITIES) break;
+    chosen.push(a);
+  }
+  return chosen;
 }
 
 /* Segment-Efforts und Kurvenpunkte aus einer Radaktivitaet einsammeln */

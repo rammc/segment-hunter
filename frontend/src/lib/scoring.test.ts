@@ -5,6 +5,7 @@ import {
   curveAt,
   fmtPace,
   fmtTime,
+  ftpCurvePoints,
   huntScore,
   interpolateAt,
   komFeasibility,
@@ -238,6 +239,39 @@ describe("buildPowerCurve", () => {
   it("ignoriert unplausible Punkte", () => {
     const curve = buildPowerCurve([], [[0, 300], [60, 0], [-5, 100], [120, NaN as unknown as number]]);
     expect(curve).toEqual([]);
+  });
+});
+
+describe("ftpCurvePoints", () => {
+  it("liefert Stuetzstellen bei 20 und 60 Minuten", () => {
+    expect(ftpCurvePoints(250)).toEqual([
+      [1200, Math.round(250 / 0.95)],
+      [3600, 250],
+    ]);
+  });
+
+  it("gibt nichts fuer fehlende oder unplausible FTP-Werte", () => {
+    expect(ftpCurvePoints(null)).toEqual([]);
+    expect(ftpCurvePoints(undefined)).toEqual([]);
+    expect(ftpCurvePoints(0)).toEqual([]);
+    expect(ftpCurvePoints(20)).toEqual([]);
+    expect(ftpCurvePoints(900)).toEqual([]);
+  });
+
+  it("hebt die Kurve an, wenn die Fahrten locker waren", () => {
+    // lockere Efforts weit unter FTP-Niveau
+    const curve = buildPowerCurve([], [[300, 150], [1800, 120], ...ftpCurvePoints(250)]);
+    const at = new Map(curve);
+    expect(at.get(3600)).toBe(250);
+    expect(at.get(1200)).toBe(Math.round(250 / 0.95));
+    // Monotonie zieht auch kuerzere Dauern hoch
+    expect(at.get(300)!).toBeGreaterThanOrEqual(Math.round(250 / 0.95));
+  });
+
+  it("ueberschreibt echte Bestwerte nicht nach unten", () => {
+    // Fahrer hat bei 20 min mehr getreten, als das FTP vermuten laesst
+    const curve = buildPowerCurve([], [[1200, 320], ...ftpCurvePoints(250)]);
+    expect(new Map(curve).get(1200)).toBe(320);
   });
 });
 

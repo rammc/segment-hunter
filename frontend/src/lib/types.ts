@@ -5,6 +5,7 @@ export interface StravaAthlete {
   firstname?: string;
   lastname?: string;
   weight?: number; // kg
+  ftp?: number | null; // W, braucht profile:read_all
 }
 
 export interface SummaryActivity {
@@ -16,6 +17,10 @@ export interface SummaryActivity {
   total_elevation_gain: number; // m
   start_date_local: string;
   pr_count?: number;
+  achievement_count?: number;
+  average_watts?: number;
+  average_speed?: number; // m/s
+  suffer_score?: number | null;
 }
 
 export interface SummarySegment {

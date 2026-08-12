@@ -64,6 +64,17 @@ export class StravaClient {
     if (res.status === 401) {
       throw new ProxyError("Proxy meldet 401: Proxy-Key pruefen.", 401);
     }
+    if (res.status === 429) {
+      const now = new Date();
+      const nextQuarter = new Date(now);
+      nextQuarter.setMinutes(Math.floor(now.getMinutes() / 15) * 15 + 15, 0, 0);
+      const hh = String(nextQuarter.getHours()).padStart(2, "0");
+      const mm = String(nextQuarter.getMinutes()).padStart(2, "0");
+      throw new ProxyError(
+        `Strava-Rate-Limit erreicht (100 Anfragen pro 15 Minuten). Ab ${hh}:${mm} Uhr geht es weiter.`,
+        429
+      );
+    }
     if (!res.ok) {
       let detail = "";
       try {

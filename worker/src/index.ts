@@ -86,17 +86,55 @@ async function getAccessToken(env: Env): Promise<string> {
   return cache.accessToken as string;
 }
 
-/* Strava-GET mit Bearer-Token, Antwort 1:1 durchreichen */
+/* ---------- Antwort-Cache auf Isolate-Ebene ----------
+   Aktivitaetsdetails und Streams sind unveraenderlich, Segmentdetails
+   aendern sich selten. Der Cache absorbiert wiederholte Loads (Refresh,
+   Sport-Wechsel, Mehr-laden) und schont Stravas Rate-Limit
+   (100 Lese-Requests pro 15 Minuten). */
+
+const responseCache = new Map<string, { expires: number; body: string }>();
+const CACHE_MAX_ENTRIES = 300;
+
+function cacheTtlSeconds(path: string): number {
+  if (/^\/activities\/\d+/.test(path)) return 86400; // Details und Streams: 24 h
+  if (path === "/segments/explore") return 3600;
+  if (/^\/segments\/\d+$/.test(path)) return 21600; // xoms/KOM-Zeiten: 6 h
+  if (path === "/athlete") return 3600;
+  if (path === "/athlete/activities") return 180; // Liste kurz, damit Neues auftaucht
+  return 0;
+}
+
+/* Strava-GET mit Bearer-Token und Cache, Antwort 1:1 durchreichen */
 async function stravaGet(env: Env, path: string, params?: URLSearchParams): Promise<Response> {
-  const token = await getAccessToken(env);
   const qs = params && [...params.keys()].length > 0 ? `?${params.toString()}` : "";
+  const cacheKey = `${path}${qs}`;
+  const ttl = cacheTtlSeconds(path);
+
+  const hit = responseCache.get(cacheKey);
+  if (hit && hit.expires > Date.now()) {
+    return new Response(hit.body, {
+      status: 200,
+      headers: { ...CORS, "content-type": "application/json", "x-cache": "hit" },
+    });
+  }
+
+  const token = await getAccessToken(env);
   const upstream = await fetch(`https://www.strava.com/api/v3${path}${qs}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const body = await upstream.text();
+
+  if (upstream.ok && ttl > 0) {
+    if (responseCache.size >= CACHE_MAX_ENTRIES) {
+      const oldest = responseCache.keys().next().value;
+      if (oldest !== undefined) responseCache.delete(oldest);
+    }
+    responseCache.set(cacheKey, { expires: Date.now() + ttl * 1000, body });
+  }
+
   return new Response(body, {
     status: upstream.status,
-    headers: { ...CORS, "content-type": "application/json" },
+    headers: { ...CORS, "content-type": "application/json", "x-cache": "miss" },
   });
 }
 

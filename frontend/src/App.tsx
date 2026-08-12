@@ -35,6 +35,7 @@ import { PowerCurve } from "./components/PowerCurve";
 import { SportToggle } from "./components/SportToggle";
 import { NearbySegments } from "./components/NearbySegments";
 import { FilterChips } from "./components/FilterBar";
+import { TrainingPlanSection } from "./components/TrainingPlanSection";
 
 /* Outdoor-Aktivitaeten je Sportart */
 const RIDE_TYPES = new Set(["Ride", "GravelRide", "MountainBikeRide"]);
@@ -81,6 +82,7 @@ export default function SegmentHunter() {
   const [step, setStep] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [athlete, setAthlete] = useState<Athlete | null>(null);
+  const [recentActivities, setRecentActivities] = useState<SummaryActivity[]>([]);
   const [segments, setSegments] = useState<SegmentEntry[]>([]);
   const [curve, setCurve] = useState<CurvePoint[]>([]);
   const [ai, setAi] = useState<CoachTarget[] | null>(null);
@@ -250,6 +252,7 @@ export default function SegmentHunter() {
       setStep("Lade Aktivitäten …");
       const wanted = targetSport === "ride" ? RIDE_TYPES : RUN_TYPES;
       const activities = await client.listActivities(ACTIVITY_WINDOW, 1);
+      setRecentActivities(activities);
       const candidates = rankActivities(activities, wanted, targetSport);
       if (!candidates.length) {
         throw new Error(
@@ -640,6 +643,17 @@ export default function SegmentHunter() {
 
             {/* Standort: Segmente in der Naehe */}
             <NearbySegments makeClient={makeClient} curve={curve} sport={sport} weight={weight} />
+
+            {/* Trainingsplan Builder + Kalender */}
+            <TrainingPlanSection
+              makeClient={makeClient}
+              sport={sport}
+              weight={weight}
+              ftp={athlete?.ftp ?? null}
+              curve={curve}
+              activities={recentActivities}
+              available={coachAvailable}
+            />
 
             {/* Power-/Pace-Kurve */}
             <section

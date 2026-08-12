@@ -18,6 +18,7 @@
      GET  /segments/explore        -> Top-Segmente in einer Bounding Box
      GET  /segments/:id            -> Segmentdetails (xoms, athlete_count)
      POST /coach                   -> AI-Taktikplan (nur mit ANTHROPIC_API_KEY)
+     POST /trainingplan            -> Trainingsplan (nur mit ANTHROPIC_API_KEY)
 
    Secrets (wrangler secret put ...):
      STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, STRAVA_REFRESH_TOKEN,
@@ -193,6 +194,128 @@ Antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown in exakt diesem Fo
   }
 }
 
+/* ---------- /trainingplan: Trainingsplan ueber die Anthropic API ---------- */
+
+interface TrainingPlanRequest {
+  sport: "ride" | "run";
+  raceDate: string; // YYYY-MM-DD
+  distanceKm: number;
+  targetTimeS: number;
+  weight: number;
+  ftp: number | null;
+  curve: [number, number][];
+  behavior: {
+    weeksAnalyzed: number;
+    sessionsPerWeek: number;
+    hoursPerWeek: number;
+    weeklyKm: number;
+    longestSessionMin: number;
+    typicalDays: string[];
+  };
+}
+
+function fmtDuration(s: number): string {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = Math.round(s % 60);
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")} h`
+    : `${m}:${String(r).padStart(2, "0")} min`;
+}
+
+async function handleTrainingPlan(request: Request, env: Env): Promise<Response> {
+  if (!env.ANTHROPIC_API_KEY) {
+    return json({ error: "trainingplan nicht konfiguriert (ANTHROPIC_API_KEY fehlt)" }, 501);
+  }
+  let b: TrainingPlanRequest;
+  try {
+    b = (await request.json()) as TrainingPlanRequest;
+  } catch {
+    return json({ error: "ungueltiger Request-Body" }, 400);
+  }
+  if (
+    !b ||
+    (b.sport !== "ride" && b.sport !== "run") ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(b.raceDate || "") ||
+    !(b.distanceKm > 0) ||
+    !(b.targetTimeS > 0) ||
+    !b.behavior
+  ) {
+    return json({ error: "sport, raceDate, distanceKm, targetTimeS und behavior werden benoetigt" }, 400);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  if (b.raceDate <= today) {
+    return json({ error: "raceDate muss in der Zukunft liegen" }, 400);
+  }
+  const daysUntil = Math.ceil(
+    (new Date(`${b.raceDate}T12:00:00Z`).getTime() - new Date(`${today}T12:00:00Z`).getTime()) /
+      86400000
+  );
+  const weeksUntil = Math.min(Math.ceil(daysUntil / 7), 16);
+
+  const isRide = b.sport === "ride";
+  const speed = (b.distanceKm * 1000) / b.targetTimeS;
+  const paceStr = isRide
+    ? `${(speed * 3.6).toFixed(1)} km/h Schnitt`
+    : `${Math.floor(1000 / speed / 60)}:${String(Math.round((1000 / speed) % 60)).padStart(2, "0")} min/km Schnitt`;
+
+  const prompt = `Du bist ein erfahrener ${isRide ? "Radsport" : "Lauf"}-Trainer und erstellst einen konkreten Trainingsplan.
+
+Heute ist ${today}. Wettkampf am ${b.raceDate} (${daysUntil} Tage): ${b.distanceKm} km mit Zielzeit ${fmtDuration(b.targetTimeS)} (${paceStr}).
+Athlet: ${Math.round(b.weight)} kg${isRide && b.ftp ? `, FTP ${b.ftp} W` : ""}.
+${isRide ? "Power-Kurve (Sekunden -> Watt)" : "Pace-Kurve (Sekunden -> m/s)"}: ${JSON.stringify(b.curve)}.
+Trainingsverhalten der letzten ${b.behavior.weeksAnalyzed} Wochen: ${b.behavior.sessionsPerWeek} Einheiten/Woche, ${b.behavior.hoursPerWeek} h/Woche, ${b.behavior.weeklyKm} km/Woche, laengste Einheit ${b.behavior.longestSessionMin} min, typische Trainingstage: ${b.behavior.typicalDays.join(", ") || "unbekannt"}.
+
+Regeln:
+- Plane von morgen bis einschliesslich ${b.raceDate}, insgesamt ${weeksUntil} Wochen. Bei mehr als 16 Wochen bis zum Rennen: plane nur die letzten 16 Wochen.
+- Baue auf dem tatsaechlichen Verhalten auf: aehnlich viele Einheiten pro Woche (maximal eine mehr), bevorzugt an den typischen Trainingstagen. Wochenumfang hoechstens 10 Prozent pro Woche steigern.
+- Klassische Periodisierung: Aufbau, Spitze etwa 2 bis 3 Wochen vor dem Rennen, dann Taper. Jede 4. Woche entlastend.
+- Der Renntag selbst ist ein Eintrag mit type "race".
+- Liste NUR Trainingstage auf, keine Ruhetage.
+- Jede Einheit mit konkretem ${isRide ? "Watt-Ziel (an FTP und Power-Kurve orientiert)" : "Pace-Ziel (an der Pace-Kurve orientiert)"} im Feld "target" und 1 bis 2 Saetzen Beschreibung. Realistisch fuer die Zielzeit; wenn die Zielzeit angesichts der Kurve sehr ambitioniert ist, sag das im summary ehrlich.
+- Deutsch, keine Em-Dashes.
+
+Antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown in exakt diesem Format:
+{"summary":"2 bis 3 Saetze Einordnung","weeks":[{"focus":"Wochenfokus","days":[{"date":"YYYY-MM-DD","type":"interval|tempo|endurance|long|recovery|race","title":"Kurzer Titel","description":"1-2 Saetze","durationMin":60,"target":"${isRide ? "z. B. 250 W" : "z. B. 5:10 /km"}"}]}]}`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 12000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    return json({ error: `Anthropic API-Fehler (${res.status})` }, 502);
+  }
+  const data = (await res.json()) as {
+    content?: Array<{ type: string; text?: string }>;
+    stop_reason?: string;
+  };
+  if (data.stop_reason === "max_tokens") {
+    return json({ error: "Plan zu lang, bitte kuerzeren Zeitraum waehlen" }, 502);
+  }
+  const text = (data.content || [])
+    .filter((c) => c.type === "text")
+    .map((c) => c.text || "")
+    .join("\n");
+  try {
+    const parsed = extractJson(text) as { summary?: unknown; weeks?: unknown };
+    return json({
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      weeks: Array.isArray(parsed.weeks) ? parsed.weeks : [],
+    });
+  } catch {
+    return json({ error: "Plan-Antwort konnte nicht geparst werden" }, 502);
+  }
+}
+
 /* ---------- Router ---------- */
 
 export default {
@@ -211,6 +334,7 @@ export default {
 
     if (request.method === "POST") {
       if (path === "/coach") return handleCoach(request, env);
+      if (path === "/trainingplan") return handleTrainingPlan(request, env);
       return json({ error: "not found" }, 404);
     }
     if (request.method !== "GET") {

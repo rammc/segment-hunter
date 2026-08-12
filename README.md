@@ -60,6 +60,7 @@ Client-Secret und Refresh-Token nicht in den Client.
 | `GET /activities/:id/streams` | Watt- und Zeit-Streams fuer die Power-Kurve |
 | `GET /segments/:id` | Segmentdetails (`xoms` = KOM-Zeit, `athlete_count`) |
 | `POST /coach` | AI-Taktikplan ueber die Anthropic API (optional) |
+| `POST /trainingplan` | Trainingsplan bis zum Racedate ueber die Anthropic API (optional) |
 
 ## Fachlogik
 
@@ -172,6 +173,19 @@ Einmalig im Repo konfigurieren:
 
 Die Worker-Secrets (Strava, Anthropic) leben in Cloudflare und werden von
 `wrangler deploy` nicht angefasst.
+
+## Trainingsplan Builder
+
+Racedate, Streckenlaenge und Zielzeit eingeben; der Plan wird ueber
+`POST /trainingplan` generiert und baut auf dem echten Trainingsverhalten der
+letzten 8 Wochen auf (Einheiten pro Woche, Umfang, laengste Einheit, typische
+Trainingstage) sowie FTP und Power- bzw. Pace-Kurve. Angezeigt wird er als
+Wochenkalender (Mo bis So) mit Einheiten-Typen (Intervalle, Tempo, Grundlage,
+lange Einheit, locker, Rennen). Fortschritt wird automatisch gegen Strava
+gematcht: eine geplante Einheit gilt als absolviert, wenn am selben Tag eine
+passende Aktivitaet mit mindestens der halben Dauer existiert; manuelles
+Abhaken uebersteuert das. Plan und Fortschritt liegen im localStorage des
+Browsers, es gibt bewusst kein Backend ausser dem Worker.
 
 ## Optional: AI-Taktikplan
 

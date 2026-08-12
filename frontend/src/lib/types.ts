@@ -15,6 +15,7 @@ export interface SummaryActivity {
   sport_type?: string;
   distance: number; // m
   total_elevation_gain: number; // m
+  moving_time?: number; // s
   start_date_local: string;
   pr_count?: number;
   achievement_count?: number;

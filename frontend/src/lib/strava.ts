@@ -135,6 +135,30 @@ export class StravaClient {
     return res.segments ?? [];
   }
 
+  async trainingPlan(payload: {
+    sport: "ride" | "run";
+    raceDate: string;
+    distanceKm: number;
+    targetTimeS: number;
+    weight: number;
+    ftp: number | null;
+    curve: CurvePoint[];
+    behavior: {
+      weeksAnalyzed: number;
+      sessionsPerWeek: number;
+      hoursPerWeek: number;
+      weeklyKm: number;
+      longestSessionMin: number;
+      typicalDays: string[];
+    };
+  }): Promise<{ summary: string; weeks: unknown }> {
+    return this.request<{ summary: string; weeks: unknown }>("/trainingplan", {
+      method: "POST",
+      headers: this.headers({ "content-type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+  }
+
   async coach(payload: {
     weight: number;
     curve: CurvePoint[];

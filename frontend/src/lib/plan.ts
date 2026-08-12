@@ -74,7 +74,7 @@ export interface TrainingBehavior {
   typicalDays: string[]; // z. B. ["Di", "Do", "Sa"]
 }
 
-const BEHAVIOR_WINDOW_DAYS = 56; // 8 Wochen
+export const BEHAVIOR_WINDOW_DAYS = 56; // 8 Wochen
 
 export function computeBehavior(
   activities: SummaryActivity[],
@@ -88,7 +88,18 @@ export function computeBehavior(
     const t = new Date(a.start_date_local).getTime();
     return Number.isFinite(t) && t >= cutoff;
   });
-  const weeks = BEHAVIOR_WINDOW_DAYS / 7;
+  // Durch die tatsaechlich abgedeckte Zeitspanne teilen, nicht stur durch 8
+  // Wochen: wenn die Datenlage (oder ein junger Account) weniger abdeckt,
+  // wuerde ein fixer Divisor den Umfang massiv unterschaetzen.
+  const oldest = relevant.reduce(
+    (min, a) => Math.min(min, new Date(a.start_date_local).getTime()),
+    today.getTime()
+  );
+  const spanDays = Math.min(
+    BEHAVIOR_WINDOW_DAYS,
+    Math.max(7, (today.getTime() - oldest) / 86400000)
+  );
+  const weeks = relevant.length ? spanDays / 7 : BEHAVIOR_WINDOW_DAYS / 7;
   const totalSec = relevant.reduce((sum, a) => sum + (a.moving_time ?? 0), 0);
   const totalKm = relevant.reduce((sum, a) => sum + a.distance / 1000, 0);
   const longest = relevant.reduce((max, a) => Math.max(max, a.moving_time ?? 0), 0);
@@ -105,7 +116,7 @@ export function computeBehavior(
     .map(([idx]) => WEEKDAYS_DE[idx]);
 
   return {
-    weeksAnalyzed: weeks,
+    weeksAnalyzed: Math.round(weeks * 10) / 10,
     sessionsPerWeek: Math.round((relevant.length / weeks) * 10) / 10,
     hoursPerWeek: Math.round((totalSec / 3600 / weeks) * 10) / 10,
     weeklyKm: Math.round((totalKm / weeks) * 10) / 10,

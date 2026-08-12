@@ -54,13 +54,8 @@ describe("weekdayIndex", () => {
 describe("computeBehavior", () => {
   const today = new Date("2026-08-12T12:00:00");
 
-  it("mittelt ueber 8 Wochen und erkennt typische Tage", () => {
-    const acts: SummaryActivity[] = [];
-    // 8 Wochen lang: jeden Dienstag und Samstag eine Stunde
-    for (let w = 0; w < 8; w++) {
-      acts.push(act({ start_date_local: `2026-0${w < 5 ? 7 : 6}-0${(w % 4) + 1}T08:00:00Z` }));
-    }
-    // deterministisch: feste Dienstage
+  it("teilt durch die tatsaechlich abgedeckte Zeitspanne und erkennt typische Tage", () => {
+    // Daten decken nur ~2 Wochen ab: Divisor muss ~2, nicht 8 sein
     const behavior = computeBehavior(
       [
         act({ start_date_local: "2026-08-11T08:00:00Z" }), // Di
@@ -72,11 +67,36 @@ describe("computeBehavior", () => {
       "ride",
       today
     );
-    expect(behavior.weeksAnalyzed).toBe(8);
-    expect(behavior.sessionsPerWeek).toBeCloseTo(5 / 8, 1);
+    expect(behavior.weeksAnalyzed).toBeGreaterThanOrEqual(2);
+    expect(behavior.weeksAnalyzed).toBeLessThanOrEqual(2.5);
+    expect(behavior.sessionsPerWeek).toBeGreaterThan(1.9);
+    expect(behavior.sessionsPerWeek).toBeLessThan(2.7);
     expect(behavior.typicalDays).toContain("Di");
     expect(behavior.typicalDays).toContain("Sa");
     expect(behavior.longestSessionMin).toBe(60);
+  });
+
+  it("liefert den echten Wochenumfang bei vollen 8 Wochen Daten (80 km/Woche)", () => {
+    // 8 Wochen, 4 Laeufe pro Woche a 20 km
+    const acts: SummaryActivity[] = [];
+    for (let w = 0; w < 8; w++) {
+      for (const dayOffset of [0, 2, 4, 5]) {
+        const d = new Date("2026-08-10T08:00:00"); // Montag der juengsten Woche
+        d.setDate(d.getDate() - w * 7 + dayOffset - 5);
+        acts.push(
+          act({
+            type: "Run",
+            distance: 20000,
+            moving_time: 6000,
+            start_date_local: d.toISOString(),
+          })
+        );
+      }
+    }
+    const behavior = computeBehavior(acts, "run", today);
+    expect(behavior.weeklyKm).toBeGreaterThan(70);
+    expect(behavior.weeklyKm).toBeLessThan(90);
+    expect(behavior.sessionsPerWeek).toBeGreaterThan(3.4);
   });
 
   it("ignoriert andere Sportarten und alte Aktivitaeten", () => {

@@ -17,6 +17,7 @@ import {
   runHuntScore,
 } from "./lib/scoring";
 import type { StreamInput } from "./lib/scoring";
+import { BEHAVIOR_WINDOW_DAYS } from "./lib/plan";
 import type {
   CoachTarget,
   CurvePoint,
@@ -42,8 +43,7 @@ import { TrainingPlanSection } from "./components/TrainingPlanSection";
 const RIDE_TYPES = new Set(["Ride", "GravelRide", "MountainBikeRide"]);
 const RUN_TYPES = new Set(["Run", "TrailRun"]);
 const MIN_DISTANCE_M = 2000;
-const ACTIVITY_WINDOW = 60; // so viele juengste Aktivitaeten kommen als Kandidaten infrage
-const INITIAL_ACTIVITIES = 12; // davon werden zunaechst die aussichtsreichsten analysiert
+const INITIAL_ACTIVITIES = 12; // zunaechst analysierte Aktivitaeten (die aussichtsreichsten)
 const LOAD_MORE_ACTIVITIES = 6; // pro "Mehr laden"-Klick
 const ALWAYS_RECENT = 3; // die juengsten passenden Aktivitaeten sind immer dabei
 const MAX_KOM_LOOKUPS = 15; // Bestzeiten-Abfragen pro Ladevorgang
@@ -251,9 +251,19 @@ export default function SegmentHunter() {
       }
       setAthlete({ name, weight: kg, ftp });
 
-      setStep("Lade Aktivitäten …");
+      setStep("Lade Aktivitäten der letzten 8 Wochen …");
       const wanted = targetSport === "ride" ? RIDE_TYPES : RUN_TYPES;
-      const activities = await client.listActivities(ACTIVITY_WINDOW, 1);
+      // after auf volle Stunden gerundet, damit der Worker-Cache greifen kann
+      const afterEpochS =
+        Math.floor((Date.now() - BEHAVIOR_WINDOW_DAYS * 86400 * 1000) / 3600000) * 3600;
+      let activities = await client.listActivities(200, 1, afterEpochS);
+      if (activities.length === 200) {
+        activities = [...activities, ...(await client.listActivities(200, 2, afterEpochS))];
+      }
+      // Strava liefert bei "after" aelteste zuerst; wir wollen neueste zuerst
+      activities = [...activities].sort((a, b) =>
+        b.start_date_local.localeCompare(a.start_date_local)
+      );
       setRecentActivities(activities);
       const candidates = rankActivities(activities, wanted, targetSport);
       if (!candidates.length) {
@@ -963,9 +973,9 @@ export default function SegmentHunter() {
                   benötigte Watt (Schätzung: P∝v bei Steigung ≥5 %, P∝v²·⁷ im Flachen, dazwischen
                   geblendet; Wind, Aero-Position und Taktik sind nicht modelliert). Datenquellen:
                   Segment-Efforts und Watt-Streams über den eigenen Proxy (Strava v3), KOM-Zeiten
-                  aus den Segmentdetails (xoms). Analysiert werden die härtesten und jüngsten der
-                  letzten {ACTIVITY_WINDOW} Aktivitäten; das FTP aus deinem Strava-Profil verankert
-                  die Kurve bei 20 und 60 Minuten.
+                  aus den Segmentdetails (xoms). Analysiert werden die härtesten und jüngsten
+                  Fahrten der letzten 8 Wochen; das FTP aus deinem Strava-Profil verankert die
+                  Kurve bei 20 und 60 Minuten.
                 </>
               ) : (
                 <>

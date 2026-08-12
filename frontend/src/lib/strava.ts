@@ -106,11 +106,13 @@ export class StravaClient {
     return this.get<StravaAthlete>("/athlete");
   }
 
-  listActivities(perPage = 30, page = 1): Promise<SummaryActivity[]> {
-    return this.get<SummaryActivity[]>("/athlete/activities", {
+  listActivities(perPage = 30, page = 1, afterEpochS?: number): Promise<SummaryActivity[]> {
+    const params: Record<string, string | number | boolean> = {
       per_page: perPage,
       page,
-    });
+    };
+    if (afterEpochS) params.after = afterEpochS;
+    return this.get<SummaryActivity[]>("/athlete/activities", params);
   }
 
   getActivity(id: string | number): Promise<DetailedActivity> {

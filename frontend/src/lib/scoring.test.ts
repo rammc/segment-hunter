@@ -13,6 +13,7 @@ import {
   parseKomTime,
   physicsKomWatts,
   requiredWattsForKom,
+  riegelEfforts,
   runFeasibility,
   runHuntScore,
 } from "./scoring";
@@ -380,6 +381,43 @@ describe("fmtPace", () => {
   it("gibt Platzhalter fuer fehlende Werte", () => {
     expect(fmtPace(null)).toBe("-");
     expect(fmtPace(0)).toBe("-");
+  });
+});
+
+describe("riegelEfforts", () => {
+  // 10 km in 44:00 (2640 s) als Referenz
+  const tenK = { distance: 10000, moving_time: 2640 };
+
+  it("extrapoliert ein plausibles Marathon-Potenzial aus einem 10er", () => {
+    const points = riegelEfforts([tenK]);
+    const threeH = points.find((p) => p.moving_time === 10800)!;
+    // Riegel: 44-min-10er entspricht etwa 3:22 h Marathon,
+    // bei 3 h Dauer also rund 37 bis 39 km
+    expect(threeH.distance).toBeGreaterThan(36000);
+    expect(threeH.distance).toBeLessThan(39500);
+  });
+
+  it("hebt die Kurve am langen Ende ueber das Trainingstempo", () => {
+    // lockere lange Laeufe bei ~5:30/km plus ein harter 10er
+    const easy = { distance: 15000, moving_time: 4950 }; // 5:30/km
+    const curve = buildSpeedCurve([easy, tenK, ...riegelEfforts([easy, tenK])]);
+    const atThreeH = curve.filter(([t]) => t >= 10800).map(([, v]) => v)[0];
+    // Rennpotenzial (~4:45/km = 3.5 m/s) statt 5:30/km (3.03 m/s)
+    expect(atThreeH).toBeGreaterThan(3.3);
+  });
+
+  it("nutzt nur harte, lange genug Referenzen", () => {
+    // 2-min-Intervall und 200-m-Sprint taugen nicht als Referenz
+    expect(riegelEfforts([{ distance: 800, moving_time: 120 }])).toEqual([]);
+    expect(riegelEfforts([{ distance: 200, moving_time: 30 }])).toEqual([]);
+    expect(riegelEfforts([])).toEqual([]);
+  });
+
+  it("extrapoliert nur zu laengeren Dauern", () => {
+    // 90-min-Referenz: keine Ziele unterhalb von 90 min
+    const long = { distance: 20000, moving_time: 5400 };
+    const points = riegelEfforts([long]);
+    expect(points.every((p) => p.moving_time > 5400)).toBe(true);
   });
 });
 

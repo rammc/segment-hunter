@@ -12,6 +12,7 @@ import {
   interpolateAt,
   komFeasibility,
   parseKomTime,
+  riegelEfforts,
   runFeasibility,
   runHuntScore,
 } from "./lib/scoring";
@@ -124,7 +125,8 @@ export default function SegmentHunter() {
   function buildCurveFor(store: DataStore): CurvePoint[] {
     return store.sport === "ride"
       ? buildPowerCurve(store.streams, [...store.wattPoints, ...ftpCurvePoints(store.ftp)])
-      : buildSpeedCurve(store.runEfforts);
+      : // Riegel-Punkte verankern das lange Ende als Rennpotenzial statt Trainingstempo
+        buildSpeedCurve([...store.runEfforts, ...riegelEfforts(store.runEfforts)]);
   }
 
   /* Naechsten Schwung Aktivitaeten analysieren und in den Store einsammeln */
@@ -971,8 +973,11 @@ export default function SegmentHunter() {
                   Rang-Bonus (30 %). CR-Machbarkeit = deine interpolierte Geschwindigkeit auf der
                   CR-Dauer geteilt durch die benötigte Geschwindigkeit (Distanz durch CR-Zeit).
                   Steigung ist beim Laufen nicht modelliert; bergige Segmente werden daher
-                  überschätzt. Datenquellen: Best Efforts und Segment-Efforts über den eigenen
-                  Proxy (Strava v3), CR-Zeiten aus den Segmentdetails (xoms).
+                  überschätzt. Das lange Ende der Kurve wird per Riegel-Formel (Exponent 1,06)
+                  aus deinen besten Efforts zwischen 6 und 90 Minuten extrapoliert und zeigt
+                  damit Rennpotenzial statt Trainingstempo. Datenquellen: Best Efforts und
+                  Segment-Efforts über den eigenen Proxy (Strava v3), CR-Zeiten aus den
+                  Segmentdetails (xoms).
                 </>
               )}
             </footer>

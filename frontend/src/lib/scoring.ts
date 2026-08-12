@@ -244,6 +244,51 @@ export function buildSpeedCurve(
   return points as CurvePoint[];
 }
 
+/* ---------- Riegel-Extrapolation: Rennpotenzial auf langen Dauern ---------- */
+
+/** Standard-Exponent der Riegel-Formel t2 = t1 * (d2/d1)^k */
+const RIEGEL_EXPONENT = 1.06;
+/** Referenz-Efforts: hart genug, um als Leistungsnachweis zu taugen */
+const RIEGEL_REF_MIN_S = 360; // 6 min
+const RIEGEL_REF_MAX_S = 5400; // 90 min
+const RIEGEL_REF_MIN_DIST = 1500;
+/** Zieldauern, auf die extrapoliert wird (30 min bis 4 h) */
+const RIEGEL_TARGETS = [1800, 3600, 5400, 7200, 10800, 14400];
+
+/**
+ * Pseudo-Efforts fuer lange Dauern per Riegel-Formel aus den besten kurzen
+ * Efforts. Ohne das spiegelt das lange Ende der Pace-Kurve nur das
+ * Wohlfuehltempo der Trainingslaeufe, nicht das Rennpotenzial. Extrapoliert
+ * wird nur nach oben (Zieldauer laenger als der Referenz-Effort).
+ */
+export function riegelEfforts(
+  efforts: Array<{ distance: number; moving_time: number }>,
+  exponent: number = RIEGEL_EXPONENT
+): Array<{ distance: number; moving_time: number }> {
+  const refs = efforts.filter(
+    (e) =>
+      e &&
+      Number.isFinite(e.distance) &&
+      Number.isFinite(e.moving_time) &&
+      e.moving_time >= RIEGEL_REF_MIN_S &&
+      e.moving_time <= RIEGEL_REF_MAX_S &&
+      e.distance >= RIEGEL_REF_MIN_DIST
+  );
+  if (!refs.length) return [];
+  const out: Array<{ distance: number; moving_time: number }> = [];
+  for (const target of RIEGEL_TARGETS) {
+    let bestDist = 0;
+    for (const r of refs) {
+      if (target <= r.moving_time) continue;
+      // t2 = t1 * (d2/d1)^k nach d2 aufgeloest: d2 = d1 * (t2/t1)^(1/k)
+      const d2 = r.distance * Math.pow(target / r.moving_time, 1 / exponent);
+      if (d2 > bestDist) bestDist = d2;
+    }
+    if (bestDist > 0) out.push({ distance: bestDist, moving_time: target });
+  }
+  return out;
+}
+
 /**
  * Hunt-Score fuer Laufsegmente: Reserve = Abstand deiner Effort-Geschwindigkeit
  * zur Pace-Kurve auf der Segmentdauer, gleiche Gewichtung wie beim Rad.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { T, body, display, mono } from "./theme";
 import { StravaClient, ProxyError } from "./lib/strava";
 import {
@@ -34,19 +34,24 @@ import { Field } from "./components/Field";
 import { PowerCurve } from "./components/PowerCurve";
 import { SportToggle } from "./components/SportToggle";
 import { NearbySegments } from "./components/NearbySegments";
+import { FilterChips } from "./components/FilterBar";
 
 /* Outdoor-Aktivitaeten je Sportart */
 const RIDE_TYPES = new Set(["Ride", "GravelRide", "MountainBikeRide"]);
 const RUN_TYPES = new Set(["Run", "TrailRun"]);
 const MIN_DISTANCE_M = 2000;
 const ACTIVITY_WINDOW = 60; // so viele juengste Aktivitaeten kommen als Kandidaten infrage
-const MAX_ACTIVITIES = 12; // davon werden die aussichtsreichsten analysiert
+const INITIAL_ACTIVITIES = 12; // davon werden zunaechst die aussichtsreichsten analysiert
+const LOAD_MORE_ACTIVITIES = 6; // pro "Mehr laden"-Klick
 const ALWAYS_RECENT = 3; // die juengsten passenden Aktivitaeten sind immer dabei
-const MAX_KOM_LOOKUPS = 15;
+const MAX_KOM_LOOKUPS = 15; // Bestzeiten-Abfragen pro Ladevorgang
 const ACTIVITY_CHUNK = 3;
 
 type Phase = "setup" | "loading" | "ready";
 type KomState = "off" | "ok" | "error";
+type LenFilter = "all" | "short" | "mid" | "long";
+type GradeFilter = "all" | "flat" | "rolling" | "climb";
+type FeasFilter = "all" | "attack" | "train";
 
 interface Athlete {
   name: string;
@@ -55,6 +60,20 @@ interface Athlete {
 }
 
 type ScoredSegment = SegmentEntry & HuntScore & { feas: Feasibility | null };
+
+/* Akkumulierter Ladezustand fuer inkrementelles Nachladen */
+interface DataStore {
+  sport: Sport;
+  ftp: number | null;
+  candidates: SummaryActivity[];
+  analyzed: number; // Index in candidates, bis wohin analysiert wurde
+  streams: StreamInput[];
+  wattPoints: CurvePoint[];
+  runEfforts: Array<{ distance: number; moving_time: number }>;
+  segMap: Map<string, SegmentEntry>;
+  komChecked: Set<string>;
+  komFound: number;
+}
 
 export default function SegmentHunter() {
   const [phase, setPhase] = useState<Phase>("setup");
@@ -68,8 +87,16 @@ export default function SegmentHunter() {
   const [aiBusy, setAiBusy] = useState(false);
   const [coachAvailable, setCoachAvailable] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [remaining, setRemaining] = useState(0);
   const [komState, setKomState] = useState<KomState>("off");
   const [komMsg, setKomMsg] = useState<string | null>(null);
+
+  const [lenFilter, setLenFilter] = useState<LenFilter>("all");
+  const [gradeFilter, setGradeFilter] = useState<GradeFilter>("all");
+  const [feasFilter, setFeasFilter] = useState<FeasFilter>("all");
+
+  const dataRef = useRef<DataStore | null>(null);
 
   // Proxy-Konfiguration: die Secrets (Client-ID, Client-Secret, Refresh-Token)
   // liegen im Cloudflare Worker, nie im Browser. VITE_PROXY_URL fuellt das
@@ -89,19 +116,56 @@ export default function SegmentHunter() {
     return s === "ride" ? huntScore(seg, curvePoints) : runHuntScore(seg, curvePoints);
   }
 
-  /* KOM/CR-Zeiten fuer die aussichtsreichsten Segmente nachladen */
-  async function loadKomTimes(
-    client: StravaClient,
-    segList: SegmentEntry[],
-    curvePoints: CurvePoint[],
-    s: Sport
-  ): Promise<SegmentEntry[]> {
-    setStep(`Lade ${s === "ride" ? "KOM" : "CR"}-Zeiten über den Proxy …`);
-    // Erst grob nach Hunt-Score sortieren, damit die Lookups die Top-Segmente treffen
-    const ranked = [...segList].sort(
-      (a, b) => scoreFor(b, curvePoints, s).score - scoreFor(a, curvePoints, s).score
-    );
-    const targets = ranked.slice(0, MAX_KOM_LOOKUPS);
+  function buildCurveFor(store: DataStore): CurvePoint[] {
+    return store.sport === "ride"
+      ? buildPowerCurve(store.streams, [...store.wattPoints, ...ftpCurvePoints(store.ftp)])
+      : buildSpeedCurve(store.runEfforts);
+  }
+
+  /* Naechsten Schwung Aktivitaeten analysieren und in den Store einsammeln */
+  async function analyzeBatch(client: StravaClient, store: DataStore, count: number) {
+    const end = Math.min(store.analyzed + count, store.candidates.length);
+    const total = end - store.analyzed;
+    for (let i = store.analyzed; i < end; i += ACTIVITY_CHUNK) {
+      const chunk = store.candidates.slice(i, Math.min(i + ACTIVITY_CHUNK, end));
+      setStep(
+        `Analysiere ${store.sport === "ride" ? "Fahrten" : "Läufe"} ${i - store.analyzed + 1}-${Math.min(
+          i - store.analyzed + chunk.length,
+          total
+        )} von ${total} …`
+      );
+      const loaded = await Promise.all(
+        chunk.map(async (a) => {
+          const [activity, streamSet] = await Promise.all([
+            client.getActivity(a.id),
+            store.sport === "ride" ? client.getStreams(a.id) : Promise.resolve(null),
+          ]);
+          return { activity, streamSet };
+        })
+      );
+      for (const { activity, streamSet } of loaded) {
+        if (store.sport === "ride") {
+          collectRideActivity(activity, store.segMap, store.wattPoints);
+          if (streamSet?.watts?.data?.length && streamSet?.time?.data?.length) {
+            store.streams.push({ time: streamSet.time.data, watts: streamSet.watts.data });
+          }
+        } else {
+          collectRunActivity(activity, store.segMap, store.runEfforts);
+        }
+      }
+    }
+    store.analyzed = end;
+  }
+
+  /* Bestzeiten fuer die aussichtsreichsten, noch ungeprueften Segmente holen */
+  async function fetchKomTimes(client: StravaClient, store: DataStore, curvePoints: CurvePoint[]) {
+    const label = store.sport === "ride" ? "KOM" : "CR";
+    const unchecked = [...store.segMap.values()].filter((s) => !store.komChecked.has(s.id));
+    const targets = unchecked
+      .sort((a, b) => scoreFor(b, curvePoints, store.sport).score - scoreFor(a, curvePoints, store.sport).score)
+      .slice(0, MAX_KOM_LOOKUPS);
+    if (!targets.length) return;
+    setStep(`Lade ${label}-Zeiten über den Proxy …`);
     try {
       const results = await Promise.all(
         targets.map(async (seg) => {
@@ -118,15 +182,18 @@ export default function SegmentHunter() {
           }
         })
       );
-      const byId = new Map(results.map((r) => [r.id, r]));
-      const merged = segList.map((seg) => {
-        const k = byId.get(seg.id);
-        return k ? { ...seg, komTime: k.komTime, athleteCount: k.athleteCount } : seg;
-      });
-      const found = merged.filter((seg) => seg.komTime).length;
+      for (const r of results) {
+        store.komChecked.add(r.id);
+        const seg = store.segMap.get(r.id);
+        if (seg) {
+          store.segMap.set(r.id, { ...seg, komTime: r.komTime, athleteCount: r.athleteCount });
+        }
+        if (r.komTime) store.komFound += 1;
+      }
       setKomState("ok");
-      setKomMsg(`${found} von ${targets.length} ${s === "ride" ? "KOM" : "CR"}-Zeiten geladen.`);
-      return merged;
+      setKomMsg(
+        `${store.komFound} ${label}-Zeiten bei ${store.komChecked.size} geprüften Segmenten.`
+      );
     } catch (e) {
       setKomState("error");
       setKomMsg(
@@ -134,8 +201,14 @@ export default function SegmentHunter() {
           ? "Proxy meldet 401: Proxy-Key prüfen."
           : "Abruf der Bestzeiten über den Proxy fehlgeschlagen."
       );
-      return segList;
     }
+  }
+
+  /* Store-Inhalt in den React-State uebernehmen */
+  function publish(store: DataStore, curvePoints: CurvePoint[]) {
+    setSegments([...store.segMap.values()]);
+    setCurve(curvePoints);
+    setRemaining(store.candidates.length - store.analyzed);
   }
 
   /* Kompletter Ladefluss, auch fuer "Aktualisieren" und Sport-Wechsel */
@@ -172,52 +245,31 @@ export default function SegmentHunter() {
       setStep("Lade Aktivitäten …");
       const wanted = targetSport === "ride" ? RIDE_TYPES : RUN_TYPES;
       const activities = await client.listActivities(ACTIVITY_WINDOW, 1);
-      const picked = pickActivities(activities, wanted, targetSport);
-      if (!picked.length) {
+      const candidates = rankActivities(activities, wanted, targetSport);
+      if (!candidates.length) {
         throw new Error(
           targetSport === "ride" ? "Keine Radaktivitäten gefunden." : "Keine Läufe gefunden."
         );
       }
 
-      const segMap = new Map<string, SegmentEntry>();
-      const streams: StreamInput[] = [];
-      const wattEffortPoints: CurvePoint[] = [];
-      const runEfforts: Array<{ distance: number; moving_time: number }> = [];
+      const store: DataStore = {
+        sport: targetSport,
+        ftp,
+        candidates,
+        analyzed: 0,
+        streams: [],
+        wattPoints: [],
+        runEfforts: [],
+        segMap: new Map(),
+        komChecked: new Set(),
+        komFound: 0,
+      };
+      dataRef.current = store;
 
-      for (let i = 0; i < picked.length; i += ACTIVITY_CHUNK) {
-        const chunk = picked.slice(i, i + ACTIVITY_CHUNK);
-        setStep(
-          `Analysiere ${targetSport === "ride" ? "Fahrten" : "Läufe"} ${i + 1}-${Math.min(
-            i + chunk.length,
-            picked.length
-          )} von ${picked.length} …`
-        );
-        const loaded = await Promise.all(
-          chunk.map(async (a) => {
-            const [activity, streamSet] = await Promise.all([
-              client.getActivity(a.id),
-              targetSport === "ride" ? client.getStreams(a.id) : Promise.resolve(null),
-            ]);
-            return { activity, streamSet };
-          })
-        );
-        for (const { activity, streamSet } of loaded) {
-          if (targetSport === "ride") {
-            collectRideActivity(activity, segMap, wattEffortPoints);
-            if (streamSet?.watts?.data?.length && streamSet?.time?.data?.length) {
-              streams.push({ time: streamSet.time.data, watts: streamSet.watts.data });
-            }
-          } else {
-            collectRunActivity(activity, segMap, runEfforts);
-          }
-        }
-      }
+      await analyzeBatch(client, store, INITIAL_ACTIVITIES);
 
       setStep(targetSport === "ride" ? "Berechne Power-Kurve …" : "Berechne Pace-Kurve …");
-      const curvePoints =
-        targetSport === "ride"
-          ? buildPowerCurve(streams, [...wattEffortPoints, ...ftpCurvePoints(ftp)])
-          : buildSpeedCurve(runEfforts);
+      const curvePoints = buildCurveFor(store);
       if (!curvePoints.length) {
         throw new Error(
           targetSport === "ride"
@@ -226,11 +278,8 @@ export default function SegmentHunter() {
         );
       }
 
-      let segList = [...segMap.values()];
-      segList = await loadKomTimes(client, segList, curvePoints, targetSport);
-
-      setSegments(segList);
-      setCurve(curvePoints);
+      await fetchKomTimes(client, store, curvePoints);
+      publish(store, curvePoints);
       setSport(targetSport);
       setPhase("ready");
       setStep("");
@@ -242,8 +291,28 @@ export default function SegmentHunter() {
     }
   }
 
+  /* Lazy Load: naechste Aktivitaeten analysieren und weitere Bestzeiten holen */
+  async function loadMore() {
+    const store = dataRef.current;
+    if (!store || loadingMore || refreshing) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const client = makeClient();
+      await analyzeBatch(client, store, LOAD_MORE_ACTIVITIES);
+      const curvePoints = buildCurveFor(store);
+      await fetchKomTimes(client, store, curvePoints);
+      publish(store, curvePoints);
+      setStep("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Nachladen fehlgeschlagen");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   function switchSport(s: Sport) {
-    if (s === sport || refreshing) return;
+    if (s === sport || refreshing || loadingMore) return;
     setSport(s);
     if (phase === "ready") void loadAll(s);
   }
@@ -289,10 +358,31 @@ export default function SegmentHunter() {
     });
   }, [segments, curve, komState, sport]);
 
+  const filtered = useMemo(() => {
+    return scored.filter((s) => {
+      if (lenFilter === "short" && s.dist >= 1000) return false;
+      if (lenFilter === "mid" && (s.dist < 1000 || s.dist > 5000)) return false;
+      if (lenFilter === "long" && s.dist <= 5000) return false;
+      const grade = s.dist > 0 ? (s.elev / s.dist) * 100 : 0;
+      if (gradeFilter === "flat" && grade >= 3) return false;
+      if (gradeFilter === "rolling" && (grade < 3 || grade >= 6)) return false;
+      if (gradeFilter === "climb" && grade < 6) return false;
+      if (feasFilter === "attack" && !(s.feas && (s.feas.status === "attack" || s.feas.status === "kom")))
+        return false;
+      if (
+        feasFilter === "train" &&
+        !(s.feas && (s.feas.status === "attack" || s.feas.status === "kom" || s.feas.status === "train"))
+      )
+        return false;
+      return true;
+    });
+  }, [scored, lenFilter, gradeFilter, feasFilter]);
+
   const fiveMin = sport === "ride" ? curveAt(curve, 300) : interpolateAt(curve, 300);
   const attackable = scored.filter(
     (s) => s.feas && (s.feas.status === "attack" || s.feas.status === "kom")
   ).length;
+  const busy = refreshing || loadingMore;
 
   return (
     <div style={{ ...body, background: T.bg, color: T.text, minHeight: "100vh" }}>
@@ -333,11 +423,11 @@ export default function SegmentHunter() {
             </p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <SportToggle sport={sport} onChange={switchSport} disabled={refreshing || phase === "loading"} />
+            <SportToggle sport={sport} onChange={switchSport} disabled={busy || phase === "loading"} />
             {phase === "ready" && (
               <button
                 onClick={() => loadAll()}
-                disabled={refreshing}
+                disabled={busy}
                 style={{
                   ...display,
                   background: "transparent",
@@ -348,7 +438,7 @@ export default function SegmentHunter() {
                   fontSize: 15,
                   fontWeight: 700,
                   letterSpacing: 0.5,
-                  cursor: refreshing ? "wait" : "pointer",
+                  cursor: busy ? "wait" : "pointer",
                   textTransform: "uppercase",
                 }}
               >
@@ -446,7 +536,7 @@ export default function SegmentHunter() {
 
         {phase === "ready" && (
           <>
-            {refreshing && (
+            {busy && (
               <div
                 style={{
                   display: "flex",
@@ -617,6 +707,56 @@ export default function SegmentHunter() {
                 )}
               </div>
 
+              {/* Filter */}
+              <div
+                style={{
+                  background: T.panel,
+                  border: `1px solid ${T.line}`,
+                  borderRadius: 12,
+                  padding: "12px 16px",
+                  marginBottom: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <FilterChips
+                  label="Länge"
+                  value={lenFilter}
+                  onChange={setLenFilter}
+                  options={[
+                    { value: "all", label: "Alle" },
+                    { value: "short", label: "< 1 km" },
+                    { value: "mid", label: "1-5 km" },
+                    { value: "long", label: "> 5 km" },
+                  ]}
+                />
+                <FilterChips
+                  label="Steigung"
+                  value={gradeFilter}
+                  onChange={setGradeFilter}
+                  options={[
+                    { value: "all", label: "Alle" },
+                    { value: "flat", label: "Flach < 3 %" },
+                    { value: "rolling", label: "Hügelig 3-6 %" },
+                    { value: "climb", label: "Anstieg ≥ 6 %" },
+                  ]}
+                />
+                <FilterChips
+                  label="Chance"
+                  value={feasFilter}
+                  onChange={setFeasFilter}
+                  options={[
+                    { value: "all", label: "Alle" },
+                    { value: "attack", label: "In Reichweite" },
+                    { value: "train", label: "Mind. machbar" },
+                  ]}
+                />
+                <span style={{ color: T.faint, fontSize: 12 }}>
+                  {filtered.length} von {scored.length} Segmenten
+                </span>
+              </div>
+
               {ai && (
                 <div
                   style={{
@@ -659,7 +799,7 @@ export default function SegmentHunter() {
               )}
 
               <div style={{ display: "grid", gap: 10 }}>
-                {scored.map((s) => (
+                {filtered.map((s) => (
                   <article
                     key={s.id}
                     style={{
@@ -749,7 +889,41 @@ export default function SegmentHunter() {
                     </a>
                   </article>
                 ))}
+                {filtered.length === 0 && (
+                  <p style={{ color: T.dim, margin: 0 }}>
+                    Kein Segment passt zu den Filtern. Filter lockern oder mehr laden.
+                  </p>
+                )}
               </div>
+
+              {/* Lazy Load */}
+              {(remaining > 0 || segments.some((s) => !dataRef.current?.komChecked.has(s.id))) && (
+                <div style={{ textAlign: "center", marginTop: 14 }}>
+                  <button
+                    onClick={loadMore}
+                    disabled={busy}
+                    style={{
+                      ...display,
+                      background: "transparent",
+                      color: T.dim,
+                      border: `1px solid ${T.line}`,
+                      borderRadius: 8,
+                      padding: "10px 22px",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      letterSpacing: 0.5,
+                      cursor: busy ? "wait" : "pointer",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {loadingMore
+                      ? "Lade …"
+                      : remaining > 0
+                        ? `Mehr laden (${remaining} Aktivitäten übrig)`
+                        : "Weitere Bestzeiten laden"}
+                  </button>
+                </div>
+              )}
             </section>
 
             <footer style={{ color: T.faint, fontSize: 12, marginTop: 20, lineHeight: 1.6 }}>
@@ -783,13 +957,12 @@ export default function SegmentHunter() {
 }
 
 /**
- * Aus dem Kandidatenfenster die aussichtsreichsten Aktivitaeten auswaehlen:
- * die juengsten sind immer dabei (aktuelle Form), der Rest wird nach
- * Bestleistungs-Signalen sortiert (PRs, Achievements, hohe Durchschnitts-
- * leistung bzw. -geschwindigkeit, Suffer Score). So landen die harten
- * Einheiten in der Kurve statt nur der letzten lockeren Ausfahrten.
+ * Kandidaten sortieren: die juengsten passenden Aktivitaeten zuerst (aktuelle
+ * Form), danach der Rest nach Bestleistungs-Signalen (PRs, Achievements, hohe
+ * Durchschnittsleistung bzw. -geschwindigkeit, Suffer Score). So landen die
+ * harten Einheiten in der Kurve statt nur der letzten lockeren Ausfahrten.
  */
-function pickActivities(
+function rankActivities(
   all: SummaryActivity[],
   wanted: Set<string>,
   sport: Sport
@@ -804,12 +977,7 @@ function pickActivities(
     (a.suffer_score ?? 0) / 10 +
     (sport === "ride" ? (a.average_watts ?? 0) / 5 : (a.average_speed ?? 0) * 10);
   const rest = eligible.slice(ALWAYS_RECENT).sort((a, b) => signal(b) - signal(a));
-  const chosen = [...recent];
-  for (const a of rest) {
-    if (chosen.length >= MAX_ACTIVITIES) break;
-    chosen.push(a);
-  }
-  return chosen;
+  return [...recent, ...rest];
 }
 
 /* Segment-Efforts und Kurvenpunkte aus einer Radaktivitaet einsammeln */

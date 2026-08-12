@@ -1,9 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// base "/" passt fuer die Custom Domain (hunter-kom.com) auf GitHub Pages.
-// Fuer ein Projekt-Pages-Deployment ohne Domain: VITE_BASE=/segment-hunter/ setzen.
-export default defineConfig({
+// Projekt-Pages-Deployment: die Seite lebt unter
+// https://rammc.github.io/segment-hunter/. Lokal (npm run dev) gilt "/".
+// Ueber VITE_BASE laesst sich der Pfad ueberschreiben, z. B. "/" fuer
+// eine spaetere Custom Domain.
+export default defineConfig(({ command }) => ({
   plugins: [react()],
-  base: process.env.VITE_BASE || "/",
-});
+  base: process.env.VITE_BASE || (command === "build" ? "/segment-hunter/" : "/"),
+}));

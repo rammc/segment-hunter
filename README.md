@@ -7,7 +7,7 @@ auf denen ein KOM-Angriff realistisch ist. Basis ist deine eigene Leistung:
 aus den Watt-Streams deiner Fahrten wird eine Power-Kurve berechnet und gegen
 die KOM-Zeiten der gefahrenen Segmente gehalten.
 
-Live: [hunter-kom.com](https://hunter-kom.com/)
+Live: [rammc.github.io/segment-hunter](https://rammc.github.io/segment-hunter/)
 
 ---
 
@@ -161,8 +161,10 @@ Beide Deployments laufen ueber GitHub Actions:
 
 Einmalig im Repo konfigurieren:
 
-1. **Settings -> Pages**: Source auf "GitHub Actions" stellen.
-   Die Custom Domain (`hunter-kom.com`) kommt aus `frontend/public/CNAME`.
+1. **Settings -> Pages**: Source auf "GitHub Actions" stellen. Die Seite
+   laeuft eigenstaendig unter `https://rammc.github.io/segment-hunter/`
+   (Vite-Base `/segment-hunter/`). Fuer eine spaetere Custom Domain: Domain
+   in den Pages-Settings eintragen und den Build mit `VITE_BASE=/` fahren.
 2. **Settings -> Secrets and variables -> Actions**:
    - Secret `CLOUDFLARE_API_TOKEN` (Cloudflare API Token mit
      "Edit Workers"-Rechten)

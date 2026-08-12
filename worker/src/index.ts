@@ -221,10 +221,10 @@ export default {
         return json({ ok: true, coach: Boolean(env.ANTHROPIC_API_KEY) });
       }
       if (path === "/athlete") {
-        return stravaGet(env, "/athlete");
+        return await stravaGet(env, "/athlete");
       }
       if (path === "/athlete/activities") {
-        return stravaGet(env, "/athlete/activities", pick(url, ["per_page", "page", "before", "after"]));
+        return await stravaGet(env, "/athlete/activities", pick(url, ["per_page", "page", "before", "after"]));
       }
 
       const streams = path.match(/^\/activities\/(\d+)\/streams$/);
@@ -232,17 +232,17 @@ export default {
         const params = pick(url, ["keys", "key_by_type"]);
         if (!params.has("keys")) params.set("keys", "watts,time");
         if (!params.has("key_by_type")) params.set("key_by_type", "true");
-        return stravaGet(env, `/activities/${streams[1]}/streams`, params);
+        return await stravaGet(env, `/activities/${streams[1]}/streams`, params);
       }
 
       const activity = path.match(/^\/activities\/(\d+)$/);
       if (activity) {
-        return stravaGet(env, `/activities/${activity[1]}`, pick(url, ["include_all_efforts"]));
+        return await stravaGet(env, `/activities/${activity[1]}`, pick(url, ["include_all_efforts"]));
       }
 
       const segment = path.match(/^\/segments\/(\d+)$/);
       if (segment) {
-        return stravaGet(env, `/segments/${segment[1]}`);
+        return await stravaGet(env, `/segments/${segment[1]}`);
       }
 
       return json({ error: "not found" }, 404);

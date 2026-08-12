@@ -233,17 +233,18 @@ export function TrainingPlanSection({
             onClick={deletePlan}
             onBlur={() => setArmDelete(false)}
             style={{
-              background: "transparent",
-              color: armDelete ? T.red : T.faint,
-              border: `1px solid ${armDelete ? T.red : T.line}`,
+              background: armDelete ? T.red : "transparent",
+              color: armDelete ? "#1A0E0B" : T.red,
+              border: `1px solid ${T.red}`,
               borderRadius: 8,
-              padding: "6px 12px",
+              padding: "7px 14px",
               fontSize: 13,
+              fontWeight: 600,
               cursor: "pointer",
               ...body,
             }}
           >
-            {armDelete ? "Wirklich löschen?" : "Plan löschen"}
+            {armDelete ? "Wirklich löschen? Klick bestätigt." : "🗑 Plan löschen"}
           </button>
         )}
       </div>

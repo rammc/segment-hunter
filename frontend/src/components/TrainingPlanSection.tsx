@@ -3,6 +3,7 @@ import { T, body, display, mono } from "../theme";
 import { StravaClient } from "../lib/strava";
 import {
   computeBehavior,
+  crossSportOf,
   fmtTargetTime,
   isWorkoutDone,
   parseTargetTime,
@@ -22,6 +23,7 @@ const TYPE_STYLE: Record<WorkoutType, { label: string; color: string }> = {
   endurance: { label: "Grundlage", color: T.teal },
   long: { label: "Lang", color: "#7E9CD8" },
   recovery: { label: "Locker", color: T.faint },
+  cross: { label: "Alternativ (Rad/Lauf)", color: "#B58CD9" },
   race: { label: "Rennen", color: T.gold },
 };
 
@@ -139,6 +141,7 @@ export function TrainingPlanSection({
     try {
       const client = makeClient();
       const behavior = computeBehavior(activities, sport);
+      const cross = computeBehavior(activities, crossSportOf(sport));
       const res = await client.trainingPlan({
         sport,
         raceDate,
@@ -148,6 +151,14 @@ export function TrainingPlanSection({
         ftp,
         curve,
         behavior,
+        crossBehavior:
+          cross.sessionsPerWeek >= 0.5
+            ? {
+                sessionsPerWeek: cross.sessionsPerWeek,
+                hoursPerWeek: cross.hoursPerWeek,
+                weeklyKm: cross.weeklyKm,
+              }
+            : null,
       });
       const weeks = sanitizePlanWeeks(res.weeks);
       if (!weeks.length) throw new Error("Der generierte Plan war leer. Bitte nochmal versuchen.");

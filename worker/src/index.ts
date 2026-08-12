@@ -250,6 +250,11 @@ interface TrainingPlanRequest {
     longestSessionMin: number;
     typicalDays: string[];
   };
+  crossBehavior?: {
+    sessionsPerWeek: number;
+    hoursPerWeek: number;
+    weeklyKm: number;
+  } | null;
 }
 
 function fmtDuration(s: number): string {
@@ -302,11 +307,20 @@ async function handleTrainingPlan(request: Request, env: Env): Promise<Response>
 Heute ist ${today}. Wettkampf am ${b.raceDate} (${daysUntil} Tage): ${b.distanceKm} km mit Zielzeit ${fmtDuration(b.targetTimeS)} (${paceStr}).
 Athlet: ${Math.round(b.weight)} kg${isRide && b.ftp ? `, FTP ${b.ftp} W` : ""}.
 ${isRide ? "Power-Kurve (Sekunden -> Watt)" : "Pace-Kurve (Sekunden -> m/s)"}: ${JSON.stringify(b.curve)}.
-Trainingsverhalten der letzten ${b.behavior.weeksAnalyzed} Wochen: ${b.behavior.sessionsPerWeek} Einheiten/Woche, ${b.behavior.hoursPerWeek} h/Woche, ${b.behavior.weeklyKm} km/Woche, laengste Einheit ${b.behavior.longestSessionMin} min, typische Trainingstage: ${b.behavior.typicalDays.join(", ") || "unbekannt"}.
+Trainingsverhalten der letzten ${b.behavior.weeksAnalyzed} Wochen: ${b.behavior.sessionsPerWeek} Einheiten/Woche, ${b.behavior.hoursPerWeek} h/Woche, ${b.behavior.weeklyKm} km/Woche, laengste Einheit ${b.behavior.longestSessionMin} min, typische Trainingstage: ${b.behavior.typicalDays.join(", ") || "unbekannt"}.${
+    b.crossBehavior && b.crossBehavior.sessionsPerWeek >= 0.5
+      ? `\nZusaetzlich trainiert der Athlet ${isRide ? "Laufen" : "Rad"}: ${b.crossBehavior.sessionsPerWeek} Einheiten/Woche, ${b.crossBehavior.hoursPerWeek} h/Woche, ${b.crossBehavior.weeklyKm} km/Woche.`
+      : ""
+  }
 
 Regeln:
 - Plane von morgen bis einschliesslich ${b.raceDate}, insgesamt ${weeksUntil} Wochen. Bei mehr als 16 Wochen bis zum Rennen: plane nur die letzten 16 Wochen.
-- Baue auf dem tatsaechlichen Verhalten auf: aehnlich viele Einheiten pro Woche (maximal eine mehr), bevorzugt an den typischen Trainingstagen. Wochenumfang hoechstens 10 Prozent pro Woche steigern.
+- Baue auf dem tatsaechlichen Verhalten auf: aehnlich viele Einheiten pro Woche (maximal eine mehr), bevorzugt an den typischen Trainingstagen.
+- WICHTIG zum Umfang: Der Athlet traegt aktuell etwa ${b.behavior.weeklyKm} km bzw. ${b.behavior.hoursPerWeek} h pro Woche. Aufbauwochen muessen diesen Umfang HALTEN oder moderat steigern (maximal 10 Prozent pro Woche). Deutlich weniger Umfang gibt es nur in Entlastungswochen (etwa 70 Prozent) und im Taper. Plane NIE einen Aufbau-Wochenumfang unterhalb des aktuellen Niveaus.${
+    b.crossBehavior && b.crossBehavior.sessionsPerWeek >= 0.5
+      ? `\n- Plane 1 bis 2 Einheiten Alternativtraining (${isRide ? "Laufen" : "Radfahren"}) pro Woche mit type "cross" ein: lockere Einheiten zur Regeneration oder als gelenkschonender Umfangsersatz, passend zum bisherigen Verhalten. In der Rennwoche kein Alternativtraining.`
+      : ""
+  }
 - Klassische Periodisierung: Aufbau, Spitze etwa 2 bis 3 Wochen vor dem Rennen, dann Taper. Jede 4. Woche entlastend.
 - Der Renntag selbst ist ein Eintrag mit type "race".
 - Liste NUR Trainingstage auf, keine Ruhetage.
@@ -314,7 +328,7 @@ Regeln:
 - Deutsch, keine Em-Dashes.
 
 Antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown in exakt diesem Format:
-{"summary":"2 bis 3 Saetze Einordnung","weeks":[{"focus":"Wochenfokus","days":[{"date":"YYYY-MM-DD","type":"interval|tempo|endurance|long|recovery|race","title":"Kurzer Titel","description":"1-2 Saetze","durationMin":60,"target":"${isRide ? "z. B. 250 W" : "z. B. 5:10 /km"}"}]}]}`;
+{"summary":"2 bis 3 Saetze Einordnung","weeks":[{"focus":"Wochenfokus","days":[{"date":"YYYY-MM-DD","type":"interval|tempo|endurance|long|recovery|cross|race","title":"Kurzer Titel","description":"1-2 Saetze","durationMin":60,"target":"${isRide ? "z. B. 250 W" : "z. B. 5:10 /km"}"}]}]}`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",

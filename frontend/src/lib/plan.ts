@@ -6,7 +6,19 @@ import type { Sport, SummaryActivity } from "./types";
    hier lebt alles, was deterministisch und testbar ist.
    ============================================================ */
 
-export type WorkoutType = "interval" | "tempo" | "endurance" | "long" | "recovery" | "race";
+export type WorkoutType =
+  | "interval"
+  | "tempo"
+  | "endurance"
+  | "long"
+  | "recovery"
+  | "cross"
+  | "race";
+
+/** Alternativtraining findet in der jeweils anderen Sportart statt */
+export function crossSportOf(sport: Sport): Sport {
+  return sport === "ride" ? "run" : "ride";
+}
 
 export interface PlanWorkout {
   date: string; // YYYY-MM-DD
@@ -146,7 +158,8 @@ export function isWorkoutDone(
 ): boolean {
   const manualState = manual[workoutKey(w)];
   if (manualState !== undefined) return manualState;
-  const types = SPORT_ACTIVITY_TYPES[sport];
+  // Cross-Einheiten (Alternativtraining) matchen gegen die andere Sportart
+  const types = SPORT_ACTIVITY_TYPES[w.type === "cross" ? crossSportOf(sport) : sport];
   return activities.some(
     (a) =>
       (types.has(a.type) || types.has(a.sport_type ?? "")) &&
@@ -181,7 +194,15 @@ export function planProgress(
 
 /* ---------- Plan-Validierung (Antwort der Worker-Route) ---------- */
 
-const WORKOUT_TYPES = new Set<string>(["interval", "tempo", "endurance", "long", "recovery", "race"]);
+const WORKOUT_TYPES = new Set<string>([
+  "interval",
+  "tempo",
+  "endurance",
+  "long",
+  "recovery",
+  "cross",
+  "race",
+]);
 
 export function sanitizePlanWeeks(raw: unknown): PlanWeek[] {
   if (!Array.isArray(raw)) return [];

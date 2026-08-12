@@ -164,6 +164,11 @@ export class StravaClient {
       longestSessionMin: number;
       typicalDays: string[];
     };
+    crossBehavior?: {
+      sessionsPerWeek: number;
+      hoursPerWeek: number;
+      weeklyKm: number;
+    } | null;
   }): Promise<{ summary: string; weeks: unknown }> {
     return this.request<{ summary: string; weeks: unknown }>("/trainingplan", {
       method: "POST",

@@ -144,6 +144,18 @@ describe("isWorkoutDone / planProgress", () => {
     ).toBe(false);
   });
 
+  it("matcht Cross-Einheiten gegen die andere Sportart", () => {
+    const cross: PlanWorkout = { ...workout, type: "cross", title: "Lockere Radausfahrt" };
+    // Laufplan: Cross-Einheit wird durch eine Radfahrt abgehakt
+    expect(
+      isWorkoutDone(cross, "run", [act({ type: "Ride", start_date_local: "2026-08-11T17:00:00Z", moving_time: 3000 })], {})
+    ).toBe(true);
+    // aber nicht durch einen Lauf
+    expect(
+      isWorkoutDone(cross, "run", [act({ type: "Run", start_date_local: "2026-08-11T17:00:00Z", moving_time: 3000 })], {})
+    ).toBe(false);
+  });
+
   it("manuelles Abhaken uebersteuert in beide Richtungen", () => {
     expect(isWorkoutDone(workout, "ride", [], { "2026-08-11|GA1": true })).toBe(true);
     expect(

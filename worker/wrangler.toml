@@ -1,0 +1,12 @@
+# Gleicher Name wie der bestehende Prototyp-Worker: "wrangler deploy"
+# aktualisiert ihn in place, Secrets und URL bleiben erhalten.
+name = "strava-kom-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+# Secrets (wrangler secret put ...):
+#   STRAVA_CLIENT_ID
+#   STRAVA_CLIENT_SECRET
+#   STRAVA_REFRESH_TOKEN
+#   PROXY_KEY            (optional, empfohlen)
+#   ANTHROPIC_API_KEY    (optional, nur fuer POST /coach)

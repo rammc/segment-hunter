@@ -100,9 +100,12 @@ export default function SegmentHunter() {
 
   // Proxy-Konfiguration: die Secrets (Client-ID, Client-Secret, Refresh-Token)
   // liegen im Cloudflare Worker, nie im Browser. VITE_PROXY_URL fuellt das
-  // Feld vor, kann aber ueberschrieben werden.
-  const [proxyUrl, setProxyUrl] = useState<string>(import.meta.env.VITE_PROXY_URL ?? "");
-  const [proxyKey, setProxyKey] = useState("");
+  // Feld vor; URL und Proxy-Key werden nach erfolgreichem Verbinden im
+  // localStorage gemerkt, damit das Passwort nicht jedes Mal faellig ist.
+  const [proxyUrl, setProxyUrl] = useState<string>(
+    () => readStored("sh:proxyUrl") || import.meta.env.VITE_PROXY_URL || ""
+  );
+  const [proxyKey, setProxyKey] = useState<string>(() => readStored("sh:proxyKey"));
 
   const weight = athlete?.weight || 71;
   const configured = proxyUrl.trim().length > 0;
@@ -227,6 +230,8 @@ export default function SegmentHunter() {
       const health = await client.health();
       if (!health.ok) throw new Error("Proxy nicht erreichbar. URL prüfen.");
       setCoachAvailable(Boolean(health.coach));
+      writeStored("sh:proxyUrl", proxyUrl.trim());
+      writeStored("sh:proxyKey", proxyKey.trim());
 
       setStep("Lade Athletenprofil …");
       let name = "Athlet";
@@ -954,6 +959,24 @@ export default function SegmentHunter() {
       </main>
     </div>
   );
+}
+
+/* localStorage-Zugriff, tolerant gegen Private Mode und geblockte Storage-APIs */
+function readStored(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch {
+    // Storage nicht verfuegbar: dann eben ohne Merken
+  }
 }
 
 /**

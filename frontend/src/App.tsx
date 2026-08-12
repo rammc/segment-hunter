@@ -641,11 +641,19 @@ export default function SegmentHunter() {
               </span>
             </section>
 
-            {/* Standort: Segmente in der Naehe */}
-            <NearbySegments makeClient={makeClient} curve={curve} sport={sport} weight={weight} />
+            {/* Standort: Segmente in der Naehe; key wie beim Trainingsplan */}
+            <NearbySegments
+              key={`nearby-${sport}`}
+              makeClient={makeClient}
+              curve={curve}
+              sport={sport}
+              weight={weight}
+            />
 
-            {/* Trainingsplan Builder + Kalender */}
+            {/* Trainingsplan Builder + Kalender; key erzwingt Remount beim
+                Sport-Wechsel, damit der Plan der jeweiligen Sportart laedt */}
             <TrainingPlanSection
+              key={sport}
               makeClient={makeClient}
               sport={sport}
               weight={weight}

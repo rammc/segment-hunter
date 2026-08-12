@@ -80,16 +80,8 @@ export function TrainingPlanSection({
   const [distanceKm, setDistanceKm] = useState("");
   const [targetTime, setTargetTime] = useState("");
 
-  // Beim Sport-Wechsel den passenden Plan aus dem Storage ziehen
-  const [loadedSport, setLoadedSport] = useState(sport);
-  if (loadedSport !== sport) {
-    setLoadedSport(sport);
-    setPlan(readJson<TrainingPlan>(planKey));
-    setManual(readJson<ManualDone>(doneKey) ?? {});
-    setSelected(null);
-    setArmDelete(false);
-    setError(null);
-  }
+  // Sport-Wechsel: App remountet die Komponente per key={sport}, dadurch
+  // lesen die useState-Initializer oben automatisch den richtigen Plan.
 
   const today = new Date().toISOString().slice(0, 10);
 

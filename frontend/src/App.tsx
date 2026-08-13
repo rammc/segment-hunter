@@ -28,6 +28,7 @@ import type {
   Sport,
   SummaryActivity,
 } from "./lib/types";
+import { useI18n } from "./lib/i18n";
 import { Crown } from "./components/Crown";
 import { Spinner } from "./components/Spinner";
 import { ScoreDial } from "./components/ScoreDial";
@@ -35,6 +36,7 @@ import { KomBadge } from "./components/KomBadge";
 import { Field } from "./components/Field";
 import { PowerCurve } from "./components/PowerCurve";
 import { SportToggle } from "./components/SportToggle";
+import { LangToggle } from "./components/LangToggle";
 import { NearbySegments } from "./components/NearbySegments";
 import { FilterChips } from "./components/FilterBar";
 import { TrainingPlanSection } from "./components/TrainingPlanSection";
@@ -78,6 +80,7 @@ interface DataStore {
 }
 
 export default function SegmentHunter() {
+  const { lang, t } = useI18n();
   const [phase, setPhase] = useState<Phase>("setup");
   const [sport, setSport] = useState<Sport>("ride");
   const [step, setStep] = useState("");
@@ -136,10 +139,12 @@ export default function SegmentHunter() {
     for (let i = store.analyzed; i < end; i += ACTIVITY_CHUNK) {
       const chunk = store.candidates.slice(i, Math.min(i + ACTIVITY_CHUNK, end));
       setStep(
-        `Analysiere ${store.sport === "ride" ? "Fahrten" : "Läufe"} ${i - store.analyzed + 1}-${Math.min(
-          i - store.analyzed + chunk.length,
+        t.stepAnalyze(
+          store.sport,
+          i - store.analyzed + 1,
+          Math.min(i - store.analyzed + chunk.length, total),
           total
-        )} von ${total} …`
+        )
       );
       const loaded = await Promise.all(
         chunk.map(async (a) => {
@@ -172,7 +177,7 @@ export default function SegmentHunter() {
       .sort((a, b) => scoreFor(b, curvePoints, store.sport).score - scoreFor(a, curvePoints, store.sport).score)
       .slice(0, MAX_KOM_LOOKUPS);
     if (!targets.length) return;
-    setStep(`Lade ${label}-Zeiten über den Proxy …`);
+    setStep(t.stepKom(label));
     try {
       const results = await Promise.all(
         targets.map(async (seg) => {
@@ -198,16 +203,10 @@ export default function SegmentHunter() {
         if (r.komTime) store.komFound += 1;
       }
       setKomState("ok");
-      setKomMsg(
-        `${store.komFound} ${label}-Zeiten bei ${store.komChecked.size} geprüften Segmenten.`
-      );
+      setKomMsg(t.komFound(store.komFound, store.komChecked.size, label));
     } catch (e) {
       setKomState("error");
-      setKomMsg(
-        e instanceof ProxyError && e.status === 401
-          ? "Proxy meldet 401: Proxy-Key prüfen."
-          : "Abruf der Bestzeiten über den Proxy fehlgeschlagen."
-      );
+      setKomMsg(e instanceof ProxyError && e.status === 401 ? t.errProxy401 : t.errKomFetch);
     }
   }
 
@@ -230,15 +229,15 @@ export default function SegmentHunter() {
     try {
       const client = makeClient();
 
-      setStep("Prüfe Proxy-Verbindung …");
+      setStep(t.stepHealth);
       const health = await client.health();
-      if (!health.ok) throw new Error("Proxy nicht erreichbar. URL prüfen.");
+      if (!health.ok) throw new Error(t.errProxyUnreachable);
       setCoachAvailable(Boolean(health.coach));
       writeStored("sh:proxyUrl", proxyUrl.trim());
       writeStored("sh:proxyKey", proxyKey.trim());
 
-      setStep("Lade Athletenprofil …");
-      let name = "Athlet";
+      setStep(t.stepAthlete);
+      let name = t.athlete;
       let kg = 71;
       let ftp: number | null = null;
       try {
@@ -251,7 +250,7 @@ export default function SegmentHunter() {
       }
       setAthlete({ name, weight: kg, ftp });
 
-      setStep("Lade Aktivitäten der letzten 8 Wochen …");
+      setStep(t.stepActivities);
       const wanted = targetSport === "ride" ? RIDE_TYPES : RUN_TYPES;
       // after auf volle Stunden gerundet, damit der Worker-Cache greifen kann
       const afterEpochS =
@@ -267,9 +266,7 @@ export default function SegmentHunter() {
       setRecentActivities(activities);
       const candidates = rankActivities(activities, wanted, targetSport);
       if (!candidates.length) {
-        throw new Error(
-          targetSport === "ride" ? "Keine Radaktivitäten gefunden." : "Keine Läufe gefunden."
-        );
+        throw new Error(targetSport === "ride" ? t.errNoRides : t.errNoRuns);
       }
 
       const store: DataStore = {
@@ -288,14 +285,10 @@ export default function SegmentHunter() {
 
       await analyzeBatch(client, store, INITIAL_ACTIVITIES);
 
-      setStep(targetSport === "ride" ? "Berechne Power-Kurve …" : "Berechne Pace-Kurve …");
+      setStep(t.stepCurve(targetSport));
       const curvePoints = buildCurveFor(store);
       if (!curvePoints.length) {
-        throw new Error(
-          targetSport === "ride"
-            ? "Keine Leistungsdaten gefunden. Ohne Watt-Werte kann nichts bewertet werden."
-            : "Keine Lauf-Bestzeiten gefunden. Ohne Best Efforts kann nichts bewertet werden."
-        );
+        throw new Error(targetSport === "ride" ? t.errNoPower : t.errNoRunEfforts);
       }
 
       await fetchKomTimes(client, store, curvePoints);
@@ -304,7 +297,7 @@ export default function SegmentHunter() {
       setPhase("ready");
       setStep("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unbekannter Fehler");
+      setError(e instanceof Error ? e.message : t.errUnknown);
       if (!isRefresh) setPhase("setup");
     } finally {
       setRefreshing(false);
@@ -325,7 +318,7 @@ export default function SegmentHunter() {
       publish(store, curvePoints);
       setStep("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Nachladen fehlgeschlagen");
+      setError(e instanceof Error ? e.message : t.errLoadMore);
     } finally {
       setLoadingMore(false);
     }
@@ -344,6 +337,7 @@ export default function SegmentHunter() {
       const client = makeClient();
       const top = scored.filter((s) => s.reliable).slice(0, 8);
       const targets = await client.coach({
+        lang,
         weight,
         curve,
         segments: top.map((s) => ({
@@ -358,7 +352,7 @@ export default function SegmentHunter() {
       });
       setAi(targets);
     } catch (e) {
-      setError("AI-Analyse fehlgeschlagen: " + (e instanceof Error ? e.message : ""));
+      setError(t.errAi + (e instanceof Error ? e.message : ""));
     } finally {
       setAiBusy(false);
     }
@@ -437,13 +431,12 @@ export default function SegmentHunter() {
               </h1>
             </div>
             <p style={{ color: T.dim, margin: "6px 0 0", fontSize: 14, maxWidth: 560 }}>
-              {sport === "ride"
-                ? "KOM-Zeiten gegen deine Power-Kurve: sehen, wo der Angriff realistisch ist."
-                : "CR-Zeiten gegen deine Pace-Kurve: sehen, wo der Angriff realistisch ist."}
+              {t.tagline(sport)}
             </p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <SportToggle sport={sport} onChange={switchSport} disabled={busy || phase === "loading"} />
+            <LangToggle />
             {phase === "ready" && (
               <button
                 onClick={() => loadAll()}
@@ -462,7 +455,7 @@ export default function SegmentHunter() {
                   textTransform: "uppercase",
                 }}
               >
-                {refreshing ? "Aktualisiere …" : "↻ Aktualisieren"}
+                {refreshing ? t.refreshing : t.refresh}
               </button>
             )}
           </div>
@@ -490,28 +483,25 @@ export default function SegmentHunter() {
                 color: T.gold,
               }}
             >
-              1 · Strava-Proxy verbinden
+              {t.setupTitle}
             </h2>
             <p style={{ color: T.dim, fontSize: 14, margin: "0 0 14px", lineHeight: 1.5 }}>
-              Browser können die Strava-API nicht direkt aufrufen: Strava setzt auf oauth/token
-              bewusst keine CORS-Header. Alle Daten laufen deshalb über deinen eigenen Cloudflare
-              Worker, der Client-Secret und Refresh-Token serverseitig hält. Hier nur dessen URL
-              eintragen.
+              {t.setupText}
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
               <Field
-                label="Proxy-URL"
+                label={t.proxyUrl}
                 value={proxyUrl}
                 onChange={setProxyUrl}
                 placeholder="https://strava-kom-proxy.<account>.workers.dev"
                 flex="2 1 320px"
               />
               <Field
-                label="Proxy-Key (optional)"
+                label={t.proxyKey}
                 value={proxyKey}
                 onChange={setProxyKey}
                 secret
-                placeholder="falls PROXY_KEY gesetzt"
+                placeholder={t.proxyKeyPlaceholder}
                 flex="1 1 200px"
               />
             </div>
@@ -532,7 +522,7 @@ export default function SegmentHunter() {
                 textTransform: "uppercase",
               }}
             >
-              Verbinden & Analyse starten
+              {t.connect}
             </button>
             {error && <p style={{ color: T.red, marginBottom: 0 }}>{error}</p>}
           </section>
@@ -581,19 +571,19 @@ export default function SegmentHunter() {
             <section style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
               {(
                 [
-                  ["Athlet", athlete?.name],
-                  ["Gewicht", `${weight} kg`],
+                  [t.athlete, athlete?.name],
+                  [t.weight, `${weight} kg`],
                   sport === "ride" && athlete?.ftp ? ["FTP", `${athlete.ftp} W`] : null,
                   fiveMin
                     ? [
-                        sport === "ride" ? "5-min-Power" : "5-min-Pace",
+                        sport === "ride" ? t.fiveMinPower : t.fiveMinPace,
                         sport === "ride"
                           ? `${fiveMin} W · ${(fiveMin / weight).toFixed(1)} W/kg`
                           : fmtPace(fiveMin),
                       ]
                     : null,
-                  ["Segmente", scored.length],
-                  komState === "ok" ? [`${crLabel} in Reichweite`, attackable] : null,
+                  [t.segments, scored.length],
+                  komState === "ok" ? [t.withinReach(crLabel), attackable] : null,
                 ] as Array<[string, string | number | undefined] | null>
               )
                 .filter((x): x is [string, string | number | undefined] => Boolean(x))
@@ -645,8 +635,8 @@ export default function SegmentHunter() {
                   color: komState === "ok" ? T.gold : komState === "error" ? T.red : T.dim,
                 }}
               >
-                {crLabel}-Modus:{" "}
-                {komState === "ok" ? "aktiv" : komState === "error" ? "Fehler" : "aus"}
+                {t.komMode(crLabel)}{" "}
+                {komState === "ok" ? t.modeOn : komState === "error" ? t.modeError : t.modeOff}
               </span>
               <span style={{ color: komState === "error" ? T.red : T.dim, fontSize: 14 }}>
                 {komMsg || ""}
@@ -695,9 +685,7 @@ export default function SegmentHunter() {
                   color: T.dim,
                 }}
               >
-                {sport === "ride"
-                  ? "Power-Kurve (Bestwerte der analysierten Fahrten)"
-                  : "Pace-Kurve (Best Efforts der analysierten Läufe)"}
+                {t.curveTitle(sport)}
               </h2>
               <PowerCurve curve={curve} weight={weight} sport={sport} />
             </section>
@@ -723,7 +711,7 @@ export default function SegmentHunter() {
                     textTransform: "uppercase",
                   }}
                 >
-                  Angriffsziele
+                  {t.huntTitle}
                 </h2>
                 {coachAvailable && sport === "ride" && (
                   <button
@@ -741,7 +729,7 @@ export default function SegmentHunter() {
                       ...body,
                     }}
                   >
-                    {aiBusy ? "Analysiere …" : "AI-Taktikplan erstellen"}
+                    {aiBusy ? t.aiBusy : t.aiButton}
                   </button>
                 )}
               </div>
@@ -760,39 +748,39 @@ export default function SegmentHunter() {
                 }}
               >
                 <FilterChips
-                  label="Länge"
+                  label={t.filterLength}
                   value={lenFilter}
                   onChange={setLenFilter}
                   options={[
-                    { value: "all", label: "Alle" },
+                    { value: "all", label: t.filterAll },
                     { value: "short", label: "< 1 km" },
                     { value: "mid", label: "1-5 km" },
                     { value: "long", label: "> 5 km" },
                   ]}
                 />
                 <FilterChips
-                  label="Steigung"
+                  label={t.filterGrade}
                   value={gradeFilter}
                   onChange={setGradeFilter}
                   options={[
-                    { value: "all", label: "Alle" },
-                    { value: "flat", label: "Flach < 3 %" },
-                    { value: "rolling", label: "Hügelig 3-6 %" },
-                    { value: "climb", label: "Anstieg ≥ 6 %" },
+                    { value: "all", label: t.filterAll },
+                    { value: "flat", label: t.filterFlat },
+                    { value: "rolling", label: t.filterRolling },
+                    { value: "climb", label: t.filterClimb },
                   ]}
                 />
                 <FilterChips
-                  label="Chance"
+                  label={t.filterChance}
                   value={feasFilter}
                   onChange={setFeasFilter}
                   options={[
-                    { value: "all", label: "Alle" },
-                    { value: "attack", label: "In Reichweite" },
-                    { value: "train", label: "Mind. machbar" },
+                    { value: "all", label: t.filterAll },
+                    { value: "attack", label: t.filterAttack },
+                    { value: "train", label: t.filterTrain },
                   ]}
                 />
                 <span style={{ color: T.faint, fontSize: 12 }}>
-                  {filtered.length} von {scored.length} Segmenten
+                  {t.filterCount(filtered.length, scored.length)}
                 </span>
               </div>
 
@@ -816,21 +804,21 @@ export default function SegmentHunter() {
                       color: T.gold,
                     }}
                   >
-                    Taktikplan
+                    {t.aiPlanTitle}
                   </h3>
-                  {ai.map((t, i) => (
+                  {ai.map((target, i) => (
                     <div
                       key={i}
                       style={{ padding: "8px 0", borderTop: i ? `1px solid ${T.line}` : "none" }}
                     >
                       <div style={{ fontWeight: 600 }}>
-                        {t.name}{" "}
+                        {target.name}{" "}
                         <span style={{ ...mono, color: T.gold, fontSize: 13 }}>
-                          → Ziel {t.targetWatts}
+                          {`${t.aiTarget} ${target.targetWatts}`}
                         </span>
                       </div>
                       <div style={{ color: T.dim, fontSize: 14 }}>
-                        {t.why} {t.pacing}
+                        {target.why} {target.pacing}
                       </div>
                     </div>
                   ))}
@@ -889,11 +877,11 @@ export default function SegmentHunter() {
                         </span>
                         {s.rank != null && (
                           <span style={{ color: T.gold }}>
-                            {crLabel}-Rang {s.rank}
+                            {t.rank(crLabel, s.rank)}
                           </span>
                         )}
                         {s.prRank != null && s.rank == null && (
-                          <span style={{ color: T.gold }}>PR-Rang {s.prRank}</span>
+                          <span style={{ color: T.gold }}>{t.prRank(s.prRank)}</span>
                         )}
                         {s.komTime && s.komTime < s.time && (
                           <span style={{ color: T.gold }}>
@@ -903,17 +891,17 @@ export default function SegmentHunter() {
                         {s.feas?.need != null && s.feas?.have != null && s.feas.status !== "kom" && (
                           <span style={{ color: s.feas.status === "attack" ? T.gold : T.teal }}>
                             {sport === "ride"
-                              ? `benötigt ≈${Math.round(s.feas.need)} W, du hast ${Math.round(s.feas.have)} W`
-                              : `benötigt ${fmtPace(s.feas.need)}, du kannst ${fmtPace(s.feas.have)}`}
+                              ? t.needHaveWatts(Math.round(s.feas.need), Math.round(s.feas.have))
+                              : t.needHavePace(fmtPace(s.feas.need), fmtPace(s.feas.have))}
                           </span>
                         )}
                         {!s.feas && s.ref && s.reliable && sport === "ride" && s.ref > s.watts && (
                           <span style={{ color: T.teal }}>
-                            Reserve +{Math.round(s.ref - s.watts)} W
+                            {t.reserve(Math.round(s.ref - s.watts))}
                           </span>
                         )}
                         {!s.reliable && (
-                          <span style={{ color: T.faint }}>[geringe Datenqualität]</span>
+                          <span style={{ color: T.faint }}>{t.lowQuality}</span>
                         )}
                       </div>
                     </div>
@@ -922,7 +910,7 @@ export default function SegmentHunter() {
                       target="_blank"
                       rel="noreferrer"
                       style={{ color: T.faint, fontSize: 12, textDecoration: "none", ...mono }}
-                      aria-label={`Segment ${s.name} auf Strava öffnen`}
+                      aria-label={t.openOnStrava(s.name)}
                     >
                       Strava ↗
                     </a>
@@ -930,7 +918,7 @@ export default function SegmentHunter() {
                 ))}
                 {filtered.length === 0 && (
                   <p style={{ color: T.dim, margin: 0 }}>
-                    Kein Segment passt zu den Filtern. Filter lockern oder mehr laden.
+                    {t.emptyFilter}
                   </p>
                 )}
               </div>
@@ -956,40 +944,17 @@ export default function SegmentHunter() {
                     }}
                   >
                     {loadingMore
-                      ? "Lade …"
+                      ? t.loadMoreBusy
                       : remaining > 0
-                        ? `Mehr laden (${remaining} Aktivitäten übrig)`
-                        : "Weitere Bestzeiten laden"}
+                        ? t.loadMore(remaining)
+                        : t.loadMoreKom}
                   </button>
                 </div>
               )}
             </section>
 
             <footer style={{ color: T.faint, fontSize: 12, marginTop: 20, lineHeight: 1.6 }}>
-              {sport === "ride" ? (
-                <>
-                  Hunt-Score = Reserve deiner Power-Kurve auf der Segmentdauer (70 %) plus
-                  Rang-Bonus (30 %). KOM-Machbarkeit = Power-Kurve auf der KOM-Dauer geteilt durch
-                  benötigte Watt (Schätzung: P∝v bei Steigung ≥5 %, P∝v²·⁷ im Flachen, dazwischen
-                  geblendet; Wind, Aero-Position und Taktik sind nicht modelliert). Datenquellen:
-                  Segment-Efforts und Watt-Streams über den eigenen Proxy (Strava v3), KOM-Zeiten
-                  aus den Segmentdetails (xoms). Analysiert werden die härtesten und jüngsten
-                  Fahrten der letzten 8 Wochen; das FTP aus deinem Strava-Profil verankert die
-                  Kurve bei 20 und 60 Minuten.
-                </>
-              ) : (
-                <>
-                  Hunt-Score = Reserve deiner Pace-Kurve auf der Segmentdauer (70 %) plus
-                  Rang-Bonus (30 %). CR-Machbarkeit = deine interpolierte Geschwindigkeit auf der
-                  CR-Dauer geteilt durch die benötigte Geschwindigkeit (Distanz durch CR-Zeit).
-                  Steigung ist beim Laufen nicht modelliert; bergige Segmente werden daher
-                  überschätzt. Das lange Ende der Kurve wird per Riegel-Formel (Exponent 1,06)
-                  aus deinen besten Efforts zwischen 6 und 90 Minuten extrapoliert und zeigt
-                  damit Rennpotenzial statt Trainingstempo. Datenquellen: Best Efforts und
-                  Segment-Efforts über den eigenen Proxy (Strava v3), CR-Zeiten aus den
-                  Segmentdetails (xoms).
-                </>
-              )}
+              {sport === "ride" ? t.footerRide : t.footerRun}
             </footer>
           </>
         )}

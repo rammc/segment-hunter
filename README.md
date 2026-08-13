@@ -1,37 +1,43 @@
 # Segment Hunter
 
-**KOM-Zeiten gegen deine Power-Kurve: sehen, wo der Angriff realistisch ist.**
+**English** · [Deutsch](README.de.md)
 
-Segment Hunter analysiert deine Strava-Aktivitaeten und identifiziert Segmente,
-auf denen ein KOM-Angriff realistisch ist. Basis ist deine eigene Leistung:
-aus den Watt-Streams deiner Fahrten wird eine Power-Kurve berechnet und gegen
-die KOM-Zeiten der gefahrenen Segmente gehalten.
+**KOM times against your power curve: see where an attack is realistic.**
+
+Segment Hunter analyzes your Strava activities and identifies segments where
+a KOM attack is realistic. The basis is your own performance: a power curve
+is computed from the watt streams of your rides and compared against the KOM
+times of the segments you have ridden.
 
 Live: [rammc.github.io/segment-hunter](https://rammc.github.io/segment-hunter/)
 
+The UI itself is bilingual: a DE/EN toggle in the header switches the
+language, the choice is remembered in the browser.
+
 ---
 
-## Inhaltsverzeichnis
+## Table of contents
 
-- [Architektur](#architektur)
-- [Fachlogik](#fachlogik)
-- [Repo-Struktur](#repo-struktur)
+- [Architecture](#architecture)
+- [Domain logic](#domain-logic)
+- [Repo structure](#repo-structure)
 - [Setup](#setup)
-  - [1. Strava-API-App anlegen](#1-strava-api-app-anlegen)
-  - [2. Worker deployen](#2-worker-deployen)
-  - [3. Frontend lokal starten](#3-frontend-lokal-starten)
+  - [1. Create a Strava API app](#1-create-a-strava-api-app)
+  - [2. Deploy the worker](#2-deploy-the-worker)
+  - [3. Run the frontend locally](#3-run-the-frontend-locally)
 - [Deployment](#deployment)
-- [Optional: AI-Taktikplan](#optional-ai-taktikplan)
-- [Entwicklung](#entwicklung)
-- [Grenzen des Modells](#grenzen-des-modells)
+- [Training plan builder](#training-plan-builder)
+- [Optional: AI tactics plan](#optional-ai-tactics-plan)
+- [Development](#development)
+- [Limits of the model](#limits-of-the-model)
 
 ---
 
-## Architektur
+## Architecture
 
-Statisches React-Frontend auf GitHub Pages, ein Cloudflare Worker als einzige
-Server-Komponente. Alle Strava-Secrets bleiben im Worker, der Browser kennt
-nur die Proxy-URL.
+A static React frontend on GitHub Pages, one Cloudflare Worker as the only
+server component. All Strava secrets stay in the worker, the browser only
+knows the proxy URL.
 
 ```
 Browser (React, GitHub Pages)
@@ -39,85 +45,88 @@ Browser (React, GitHub Pages)
    |  fetch (CORS, optional x-proxy-key)
    v
 Cloudflare Worker (strava-kom-proxy)
-   |  haelt Client-Secret + Refresh-Token,
-   |  erneuert Access Tokens selbst
-   +--> Strava v3 API   (Aktivitaeten, Efforts, Streams, Segmente)
+   |  holds client secret + refresh token,
+   |  renews access tokens itself
+   +--> Strava v3 API   (activities, efforts, streams, segments)
    +--> Anthropic API   (optional, POST /coach)
 ```
 
-Warum ein Proxy? Browser koennen die Strava-API nicht direkt aufrufen:
-Strava setzt auf `oauth/token` bewusst keine CORS-Header. Ausserdem gehoeren
-Client-Secret und Refresh-Token nicht in den Client.
+Why a proxy? Browsers cannot call the Strava API directly: Strava
+deliberately sends no CORS headers on `oauth/token`. Besides, the client
+secret and refresh token do not belong in the client.
 
-### Worker-Routen
+### Worker routes
 
-| Route | Zweck |
+| Route | Purpose |
 | --- | --- |
-| `GET /health` | Erreichbarkeit, meldet ob `/coach` konfiguriert ist |
-| `GET /athlete` | Profil (Name, Gewicht) |
-| `GET /athlete/activities` | Aktivitaetenliste (`per_page`, `page`) |
-| `GET /activities/:id` | Aktivitaet inkl. aller Segment-Efforts |
-| `GET /activities/:id/streams` | Watt- und Zeit-Streams fuer die Power-Kurve |
-| `GET /segments/:id` | Segmentdetails (`xoms` = KOM-Zeit, `athlete_count`) |
-| `POST /coach` | AI-Taktikplan ueber die Anthropic API (optional) |
-| `POST /trainingplan` | Trainingsplan bis zum Racedate ueber die Anthropic API (optional) |
+| `GET /health` | Reachability, reports whether `/coach` is configured |
+| `GET /athlete` | Profile (name, weight) |
+| `GET /athlete/activities` | Activity list (`per_page`, `page`) |
+| `GET /activities/:id` | Activity including all segment efforts |
+| `GET /activities/:id/streams` | Watt and time streams for the power curve |
+| `GET /segments/:id` | Segment details (`xoms` = KOM time, `athlete_count`) |
+| `POST /coach` | AI tactics plan via the Anthropic API (optional) |
+| `POST /trainingplan` | Training plan up to race day via the Anthropic API (optional) |
 
-## Fachlogik
+## Domain logic
 
-Der fachliche Kern liegt in [`frontend/src/lib/scoring.ts`](frontend/src/lib/scoring.ts)
-und ist mit Vitest getestet.
+The core logic lives in [`frontend/src/lib/scoring.ts`](frontend/src/lib/scoring.ts)
+and is covered by Vitest.
 
-- **Power-Kurve**: beste Durchschnittsleistung ueber Standard-Dauern
-  (5 s bis 1 h), berechnet per Sliding Window ueber die Watt-Streams der
-  letzten Fahrten. Segment-Efforts dienen als Fallback, wenn kein
-  Powermeter-Stream vorliegt. Zwischen Stuetzstellen wird logarithmisch
-  interpoliert (`curveAt`).
-- **Hunt-Score**: 70 % Leistungsreserve auf der Segmentdauer
-  (Kurvenwert minus gefahrene Watt, gedeckelt bei 60 %) plus 30 % Rang-Bonus.
-- **KOM-Machbarkeit**: benoetigte Watt fuer die KOM-Zeit ueber ein
-  Steigungsmodell (P proportional v bei Steigung >= 5 %, v^2.7 im Flachen,
-  dazwischen linear geblendet), verglichen mit der Power-Kurve auf der
-  KOM-Dauer.
-- **Badges**: KOM gehalten / in Reichweite (ratio >= 0.97) /
-  mit Training machbar (0.85 bis 0.97) / ausser Reichweite.
-- **Datenqualitaet**: Efforts mit Watt < 30 oder Dauer < 30 s werden als
-  geringe Datenqualitaet markiert und nicht gescored.
+- **Power curve**: best average power over standard durations
+  (5 s to 1 h), computed via sliding window over the watt streams of the
+  most recent rides. Segment efforts serve as fallback when no power meter
+  stream is available. Between anchor points the curve is interpolated
+  logarithmically (`curveAt`).
+- **Hunt score**: 70 % power reserve at the segment duration
+  (curve value minus ridden watts, capped at 60 %) plus 30 % rank bonus.
+- **KOM feasibility**: watts required for the KOM time via a gradient model
+  (P proportional to v on gradients >= 5 %, v^2.7 on flat, blended linearly
+  in between), compared with the power curve at the KOM duration.
+- **Badges**: KOM held / within reach (ratio >= 0.97) /
+  trainable (0.85 to 0.97) / out of reach.
+- **Data quality**: efforts with watts < 30 or duration < 30 s are flagged
+  as low data quality and not scored.
 
-## Repo-Struktur
+## Repo structure
 
 ```
 segment-hunter/
   frontend/              Vite + React + TypeScript
     src/
-      lib/strava.ts      Worker-Client
-      lib/scoring.ts     Fachlogik (huntScore, komFeasibility, curveAt, ...)
+      lib/strava.ts      Worker client
+      lib/scoring.ts     Domain logic (huntScore, komFeasibility, curveAt, ...)
       lib/scoring.test.ts
-      components/        UI-Bausteine (ScoreDial, KomBadge, PowerCurve, ...)
-      App.tsx            Ladefluss und Hunt-Liste
-  worker/                Cloudflare Worker (Strava-Proxy + /coach)
+      lib/i18n.tsx       DE/EN dictionary + language toggle context
+      components/        UI building blocks (ScoreDial, KomBadge, PowerCurve, ...)
+      App.tsx            Loading flow and hunt list
+  worker/                Cloudflare Worker (Strava proxy + /coach)
     src/index.ts
     wrangler.toml
-  reference/             Prototyp-Dateien (Claude-Artifact), unveraendert
+  docs/
+    HOWTO-wrangler.md    Step-by-step wrangler setup (EN, German available)
+  reference/             Prototype files (Claude artifact), unchanged
   .github/workflows/
-    deploy-pages.yml     Frontend-Build auf GitHub Pages
-    deploy-worker.yml    wrangler deploy bei Aenderungen unter worker/
+    deploy-pages.yml     Frontend build on GitHub Pages
+    deploy-worker.yml    wrangler deploy on changes under worker/
 ```
 
 ## Setup
 
-### 1. Strava-API-App anlegen
+### 1. Create a Strava API app
 
-1. Unter [strava.com/settings/api](https://www.strava.com/settings/api) eine
-   App anlegen. `Client ID` und `Client Secret` notieren.
-2. Einen Refresh-Token mit Scope `activity:read` (fuer private Aktivitaeten
-   `activity:read_all`) und `profile:read_all` holen, z. B. ueber den
-   OAuth-Flow:
+1. Create an app at [strava.com/settings/api](https://www.strava.com/settings/api).
+   Note down `Client ID` and `Client Secret`.
+2. Obtain a refresh token with scope `activity:read` (for private activities
+   `activity:read_all`) and `profile:read_all`, e.g. via the OAuth flow:
    - Browser: `https://www.strava.com/oauth/authorize?client_id=<ID>&response_type=code&redirect_uri=http://localhost&scope=activity:read_all,profile:read_all`
-   - Den `code` aus der Redirect-URL gegen Tokens tauschen:
+   - Exchange the `code` from the redirect URL for tokens:
      `curl -X POST https://www.strava.com/oauth/token -d client_id=<ID> -d client_secret=<SECRET> -d code=<CODE> -d grant_type=authorization_code`
-   - Der `refresh_token` aus der Antwort ist das Worker-Secret.
+   - The `refresh_token` from the response is the worker secret.
 
-### 2. Worker deployen
+### 2. Deploy the worker
+
+Detailed walkthrough: [docs/HOWTO-wrangler.md](docs/HOWTO-wrangler.md)
 
 ```bash
 cd worker
@@ -127,84 +136,86 @@ npx wrangler deploy
 npx wrangler secret put STRAVA_CLIENT_ID
 npx wrangler secret put STRAVA_CLIENT_SECRET
 npx wrangler secret put STRAVA_REFRESH_TOKEN
-npx wrangler secret put PROXY_KEY          # optional, empfohlen
-npx wrangler secret put ANTHROPIC_API_KEY  # optional, nur fuer /coach
+npx wrangler secret put PROXY_KEY          # optional, recommended
+npx wrangler secret put ANTHROPIC_API_KEY  # optional, only for /coach
 ```
 
-Danach ist der Proxy unter `https://strava-kom-proxy.<account>.workers.dev`
-erreichbar. Kurztest:
+The proxy is then reachable at `https://strava-kom-proxy.<account>.workers.dev`.
+Quick test:
 
 ```bash
 curl -H "x-proxy-key: <KEY>" https://strava-kom-proxy.<account>.workers.dev/health
 # -> {"ok":true,"coach":false}
 ```
 
-### 3. Frontend lokal starten
+### 3. Run the frontend locally
 
 ```bash
 cd frontend
 npm install
-cp .env.example .env    # VITE_PROXY_URL eintragen
+cp .env.example .env    # set VITE_PROXY_URL
 npm run dev
 ```
 
-Im Setup-Screen die Proxy-URL (vorausgefuellt aus `VITE_PROXY_URL`) und den
-Proxy-Key eintragen, dann "Verbinden & Analyse starten".
+On the setup screen, enter the proxy URL (prefilled from `VITE_PROXY_URL`)
+and the proxy key, then hit "Connect & start analysis".
 
 ## Deployment
 
-Beide Deployments laufen ueber GitHub Actions:
+Both deployments run via GitHub Actions:
 
-| Workflow | Trigger | Ziel |
+| Workflow | Trigger | Target |
 | --- | --- | --- |
-| `deploy-pages.yml` | Push auf `main` unter `frontend/` | GitHub Pages |
-| `deploy-worker.yml` | Push auf `main` unter `worker/` | Cloudflare Worker |
+| `deploy-pages.yml` | Push to `main` under `frontend/` | GitHub Pages |
+| `deploy-worker.yml` | Push to `main` under `worker/` | Cloudflare Worker |
 
-Einmalig im Repo konfigurieren:
+One-time repo configuration:
 
-1. **Settings -> Pages**: Source auf "GitHub Actions" stellen. Die Seite
-   laeuft eigenstaendig unter `https://rammc.github.io/segment-hunter/`
-   (Vite-Base `/segment-hunter/`). Fuer eine spaetere Custom Domain: Domain
-   in den Pages-Settings eintragen und den Build mit `VITE_BASE=/` fahren.
+1. **Settings -> Pages**: set Source to "GitHub Actions". The site runs
+   standalone at `https://rammc.github.io/segment-hunter/`
+   (Vite base `/segment-hunter/`). For a later custom domain: enter the
+   domain in the Pages settings and build with `VITE_BASE=/`.
 2. **Settings -> Secrets and variables -> Actions**:
-   - Secret `CLOUDFLARE_API_TOKEN` (Cloudflare API Token mit
-     "Edit Workers"-Rechten)
-   - Variable `VITE_PROXY_URL` (die Worker-URL, kein Secret)
+   - Secret `CLOUDFLARE_API_TOKEN` (Cloudflare API token with
+     "Edit Workers" rights)
+   - Variable `VITE_PROXY_URL` (the worker URL, not a secret)
 
-Die Worker-Secrets (Strava, Anthropic) leben in Cloudflare und werden von
-`wrangler deploy` nicht angefasst.
+The worker secrets (Strava, Anthropic) live in Cloudflare and are not
+touched by `wrangler deploy`.
 
-## Trainingsplan Builder
+## Training plan builder
 
-Racedate, Streckenlaenge und Zielzeit eingeben; der Plan wird ueber
-`POST /trainingplan` generiert und baut auf dem echten Trainingsverhalten der
-letzten 8 Wochen auf (Einheiten pro Woche, Umfang, laengste Einheit, typische
-Trainingstage) sowie FTP und Power- bzw. Pace-Kurve. Angezeigt wird er als
-Wochenkalender (Mo bis So) mit Einheiten-Typen (Intervalle, Tempo, Grundlage,
-lange Einheit, locker, Rennen). Fortschritt wird automatisch gegen Strava
-gematcht: eine geplante Einheit gilt als absolviert, wenn am selben Tag eine
-passende Aktivitaet mit mindestens der halben Dauer existiert; manuelles
-Abhaken uebersteuert das. Plan und Fortschritt liegen im localStorage des
-Browsers, es gibt bewusst kein Backend ausser dem Worker.
+Enter race date, distance and target time; the plan is generated via
+`POST /trainingplan` and builds on your actual training behavior of the
+last 8 weeks (sessions per week, volume, longest session, typical training
+days) plus FTP and power or pace curve. It is displayed as a weekly
+calendar (Mon to Sun) with workout types (intervals, tempo, endurance,
+long, easy, race). Progress is matched against Strava automatically: a
+planned workout counts as done when a matching activity with at least half
+the duration exists on the same day; manual check-off overrides this. Plan
+and progress live in the browser's localStorage, deliberately no backend
+besides the worker.
 
-## Optional: AI-Taktikplan
+## Optional: AI tactics plan
 
-`POST /coach` ruft die Anthropic API serverseitig auf (Modell
-`claude-sonnet-4-6`) und liefert fuer die Top-Segmente einen kurzen
-Taktikplan (Begruendung, Pacing, Zielwatt). Das Feature ist komplett
-optional: ohne `ANTHROPIC_API_KEY` meldet `/health` `coach: false` und das
-Frontend blendet den Button aus. Alles andere funktioniert unveraendert.
+`POST /coach` calls the Anthropic API server-side (model
+`claude-sonnet-4-6`) and returns a short tactics plan for the top segments
+(reasoning, pacing, target watts). The feature is fully optional: without
+`ANTHROPIC_API_KEY`, `/health` reports `coach: false` and the frontend
+hides the button. Everything else works unchanged. Both AI endpoints
+respect the UI language: the frontend sends `lang: "de" | "en"` and the
+plan is generated in that language.
 
-## Entwicklung
+## Development
 
 ```bash
-cd frontend && npm test           # Vitest fuer die Fachlogik
-cd frontend && npm run build      # Typecheck + Produktionsbuild
-cd worker   && npm run typecheck  # Worker-Typecheck
-cd worker   && npm run dev        # wrangler dev (Secrets in worker/.dev.vars)
+cd frontend && npm test           # Vitest for the domain logic
+cd frontend && npm run build      # typecheck + production build
+cd worker   && npm run typecheck  # worker typecheck
+cd worker   && npm run dev        # wrangler dev (secrets in worker/.dev.vars)
 ```
 
-Fuer `wrangler dev` eine Datei `worker/.dev.vars` anlegen (gitignored):
+For `wrangler dev` create a file `worker/.dev.vars` (gitignored):
 
 ```
 STRAVA_CLIENT_ID=...
@@ -213,13 +224,14 @@ STRAVA_REFRESH_TOKEN=...
 PROXY_KEY=...
 ```
 
-## Grenzen des Modells
+## Limits of the model
 
-- Das Steigungsmodell schaetzt benoetigte Watt nur grob: Wind, Aero-Position,
-  Gewicht des KOM-Halters und Taktik (Windschatten!) sind nicht modelliert.
-- Ohne Powermeter basiert die Kurve auf Stravas geschaetzten Watt und den
-  Effort-Durchschnitten; die Aussagekraft sinkt entsprechend.
-- Analysiert werden die letzten Fahrten (Standard: 8). Die Power-Kurve ist
-  also eine Momentaufnahme, keine Saisonbestleistung.
-- Aktuell nur Radfahren. Laufen ist geplant; die Architektur (Proxy,
-  Efforts, Bestzeiten je Distanz statt Watt) traegt das bereits.
+- The gradient model only roughly estimates required watts: wind, aero
+  position, the KOM holder's weight and tactics (drafting!) are not modeled.
+- Without a power meter the curve is based on Strava's estimated watts and
+  the effort averages; the significance drops accordingly.
+- Analyzed are the most recent rides (default: 8). The power curve is a
+  snapshot, not a season's best.
+- Running is supported via best efforts and a pace curve (CR times instead
+  of KOM watts). Gradient is not modeled for running, so hilly segments are
+  overestimated.

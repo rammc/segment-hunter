@@ -149,6 +149,7 @@ export class StravaClient {
   }
 
   async trainingPlan(payload: {
+    lang?: "de" | "en";
     sport: "ride" | "run";
     raceDate: string;
     distanceKm: number;
@@ -178,6 +179,7 @@ export class StravaClient {
   }
 
   async coach(payload: {
+    lang?: "de" | "en";
     weight: number;
     curve: CurvePoint[];
     segments: CoachRequestSegment[];

@@ -1,16 +1,24 @@
 import { T, display } from "../theme";
+import { useI18n } from "../lib/i18n";
 import type { Feasibility, FeasibilityStatus } from "../lib/types";
 
-const MAP: Record<FeasibilityStatus, { label: string; bg: string; fg: string }> = {
-  kom: { label: "DU HÄLTST DEN KOM", bg: T.gold, fg: "#1A1608" },
-  attack: { label: "KOM IN REICHWEITE", bg: T.gold, fg: "#1A1608" },
-  train: { label: "MIT TRAINING MACHBAR", bg: T.teal, fg: "#0E1B19" },
-  far: { label: "AUSSER REICHWEITE", bg: T.line, fg: T.dim },
+const STYLE: Record<FeasibilityStatus, { bg: string; fg: string }> = {
+  kom: { bg: T.gold, fg: "#1A1608" },
+  attack: { bg: T.gold, fg: "#1A1608" },
+  train: { bg: T.teal, fg: "#0E1B19" },
+  far: { bg: T.line, fg: T.dim },
 };
 
 export function KomBadge({ feas }: { feas: Feasibility | null }) {
+  const { t } = useI18n();
   if (!feas) return null;
-  const s = MAP[feas.status];
+  const s = STYLE[feas.status];
+  const label: Record<FeasibilityStatus, string> = {
+    kom: t.badgeKom,
+    attack: t.badgeAttack,
+    train: t.badgeTrain,
+    far: t.badgeFar,
+  };
   return (
     <span
       style={{
@@ -25,7 +33,7 @@ export function KomBadge({ feas }: { feas: Feasibility | null }) {
         whiteSpace: "nowrap",
       }}
     >
-      {s.label}
+      {label[feas.status]}
     </span>
   );
 }

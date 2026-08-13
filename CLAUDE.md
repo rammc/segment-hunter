@@ -38,7 +38,11 @@ einzige Server-Komponente.
 - Frontend-Konfiguration (Proxy-URL) ueber `VITE_PROXY_URL`, kein Secret
   im Client.
 - Keine Em-Dashes in Texten und UI-Copy.
-- UI-Sprache Deutsch, Design-Tokens aus `frontend/src/theme.ts`.
+- UI-Sprache DE/EN ueber den Toggle in `frontend/src/lib/i18n.tsx`
+  (alle UI-Strings dort pflegen, beide Sprachen). Design-Tokens aus
+  `frontend/src/theme.ts`.
+- README zweisprachig: `README.md` (EN) und `README.de.md` (DE) synchron
+  halten; ebenso `docs/HOWTO-wrangler.md` und `docs/HOWTO-wrangler.de.md`.
 
 ## Secrets (nie ins Repo)
 

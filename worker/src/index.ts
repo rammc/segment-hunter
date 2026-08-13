@@ -161,6 +161,7 @@ interface CoachSegment {
 }
 
 interface CoachRequest {
+  lang?: "de" | "en";
   weight: number;
   curve: [number, number][];
   segments: CoachSegment[];
@@ -188,6 +189,7 @@ async function handleCoach(request: Request, env: Env): Promise<Response> {
     return json({ error: "weight, curve und segments werden benoetigt" }, 400);
   }
   const segments = body.segments.slice(0, 8);
+  const lang = body.lang === "en" ? "Englisch" : "Deutsch";
   const prompt = `Du bist ein Radsport-Coach. Athlet: ${Math.round(body.weight)} kg.
 Power-Kurve (Sekunden -> Watt): ${JSON.stringify(body.curve)}.
 Segmente (Name | Distanz m | Hoehenmeter | Bestzeit s | Durchschnittswatt | PR-Rang | KOM-Zeit s):
@@ -200,6 +202,7 @@ ${segments
 
 Waehle die 3 aussichtsreichsten Angriffsziele. Wenn KOM-Zeiten vorhanden sind, priorisiere
 Segmente, bei denen die KOM-Zeit mit der Power-Kurve erreichbar ist.
+Alle Textfelder (why, pacing) auf ${lang}, keine Em-Dashes.
 Antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown in exakt diesem Format:
 {"targets":[{"name":"Segmentname","why":"Begruendung, 1 Satz","pacing":"Pacing-Taktik, 1 Satz","targetWatts":"Zielwatt, z. B. 280 W"}]}`;
 
@@ -235,6 +238,7 @@ Antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown in exakt diesem Fo
 /* ---------- /trainingplan: Trainingsplan ueber die Anthropic API ---------- */
 
 interface TrainingPlanRequest {
+  lang?: "de" | "en";
   sport: "ride" | "run";
   raceDate: string; // YYYY-MM-DD
   distanceKm: number;
@@ -297,6 +301,7 @@ async function handleTrainingPlan(request: Request, env: Env): Promise<Response>
   const weeksUntil = Math.min(Math.ceil(daysUntil / 7), 16);
 
   const isRide = b.sport === "ride";
+  const planLang = b.lang === "en" ? "Englisch" : "Deutsch";
   const speed = (b.distanceKm * 1000) / b.targetTimeS;
   const paceStr = isRide
     ? `${(speed * 3.6).toFixed(1)} km/h Schnitt`
@@ -325,7 +330,7 @@ Regeln:
 - Der Renntag selbst ist ein Eintrag mit type "race".
 - Liste NUR Trainingstage auf, keine Ruhetage.
 - Jede Einheit mit konkretem ${isRide ? "Watt-Ziel (an FTP und Power-Kurve orientiert)" : "Pace-Ziel (an der Pace-Kurve orientiert)"} im Feld "target" und 1 bis 2 Saetzen Beschreibung. Realistisch fuer die Zielzeit; wenn die Zielzeit angesichts der Kurve sehr ambitioniert ist, sag das im summary ehrlich.
-- Deutsch, keine Em-Dashes.
+- Alle Textfelder (summary, focus, title, description, target) auf ${planLang}, keine Em-Dashes.
 
 Antworte AUSSCHLIESSLICH mit minifiziertem JSON ohne Markdown in exakt diesem Format:
 {"summary":"2 bis 3 Saetze Einordnung","weeks":[{"focus":"Wochenfokus","days":[{"date":"YYYY-MM-DD","type":"interval|tempo|endurance|long|recovery|cross|race","title":"Kurzer Titel","description":"1-2 Saetze","durationMin":60,"target":"${isRide ? "z. B. 250 W" : "z. B. 5:10 /km"}"}]}]}`;

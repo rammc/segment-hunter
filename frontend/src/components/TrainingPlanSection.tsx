@@ -11,20 +11,20 @@ import {
   sanitizePlanWeeks,
   weekdayIndex,
   workoutKey,
-  WEEKDAYS_DE,
 } from "../lib/plan";
+import { useI18n } from "../lib/i18n";
 import type { ManualDone, PlanWorkout, TrainingPlan, WorkoutType } from "../lib/plan";
 import type { CurvePoint, Sport, SummaryActivity } from "../lib/types";
 import { Field } from "./Field";
 
-const TYPE_STYLE: Record<WorkoutType, { label: string; color: string }> = {
-  interval: { label: "Intervalle", color: T.red },
-  tempo: { label: "Tempo", color: T.gold },
-  endurance: { label: "Grundlage", color: T.teal },
-  long: { label: "Lang", color: "#7E9CD8" },
-  recovery: { label: "Locker", color: T.faint },
-  cross: { label: "Alternativ (Rad/Lauf)", color: "#B58CD9" },
-  race: { label: "Rennen", color: T.gold },
+const TYPE_COLOR: Record<WorkoutType, string> = {
+  interval: T.red,
+  tempo: T.gold,
+  endurance: T.teal,
+  long: "#7E9CD8",
+  recovery: T.faint,
+  cross: "#B58CD9",
+  race: T.gold,
 };
 
 function readJson<V>(key: string): V | null {
@@ -68,6 +68,16 @@ export function TrainingPlanSection({
   activities: SummaryActivity[];
   available: boolean;
 }) {
+  const { lang, t } = useI18n();
+  const typeLabel: Record<WorkoutType, string> = {
+    interval: t.typeInterval,
+    tempo: t.typeTempo,
+    endurance: t.typeEndurance,
+    long: t.typeLong,
+    recovery: t.typeRecovery,
+    cross: t.typeCross,
+    race: t.typeRace,
+  };
   const planKey = `sh:plan:${sport}`;
   const doneKey = `sh:planDone:${sport}`;
 
@@ -126,15 +136,15 @@ export function TrainingPlanSection({
     const km = Number(String(distanceKm).replace(",", "."));
     const targetS = parseTargetTime(targetTime);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(raceDate) || raceDate <= today) {
-      setError("Bitte ein Racedate in der Zukunft wählen.");
+      setError(t.errRaceDate);
       return;
     }
     if (!(km > 0)) {
-      setError("Bitte eine Streckenlänge in km angeben.");
+      setError(t.errDistance);
       return;
     }
     if (!targetS) {
-      setError("Zielzeit bitte als mm:ss oder h:mm:ss angeben, z. B. 45:00 oder 3:30:00.");
+      setError(t.errTargetTime);
       return;
     }
     setBusy(true);
@@ -143,6 +153,7 @@ export function TrainingPlanSection({
       const behavior = computeBehavior(activities, sport);
       const cross = computeBehavior(activities, crossSportOf(sport));
       const res = await client.trainingPlan({
+        lang,
         sport,
         raceDate,
         distanceKm: km,
@@ -161,7 +172,7 @@ export function TrainingPlanSection({
             : null,
       });
       const weeks = sanitizePlanWeeks(res.weeks);
-      if (!weeks.length) throw new Error("Der generierte Plan war leer. Bitte nochmal versuchen.");
+      if (!weeks.length) throw new Error(t.errPlanEmpty);
       const newPlan: TrainingPlan = {
         sport,
         raceDate,
@@ -177,7 +188,7 @@ export function TrainingPlanSection({
       writeJson(doneKey, null);
       setSelected(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Plan konnte nicht erstellt werden.");
+      setError(e instanceof Error ? e.message : t.errPlanFailed);
     } finally {
       setBusy(false);
     }
@@ -237,7 +248,7 @@ export function TrainingPlanSection({
             color: T.dim,
           }}
         >
-          Trainingsplan
+          {t.planTitle}
         </h2>
         {plan && (
           <button
@@ -255,7 +266,7 @@ export function TrainingPlanSection({
               ...body,
             }}
           >
-            {armDelete ? "Wirklich löschen? Klick bestätigt." : "🗑 Plan löschen"}
+            {armDelete ? t.deleteConfirm : t.deletePlan}
           </button>
         )}
       </div>
@@ -264,9 +275,7 @@ export function TrainingPlanSection({
       {!plan && (
         <>
           <p style={{ color: T.dim, fontSize: 14, margin: "0 0 12px", lineHeight: 1.5 }}>
-            Racedate, Strecke und Zielzeit angeben. Der Plan baut auf deinem Trainingsverhalten
-            der letzten 8 Wochen auf (Einheiten pro Woche, Umfang, typische Trainingstage) und
-            deiner {sport === "ride" ? "Power" : "Pace"}-Kurve.
+            {t.planIntro(sport)}
           </p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
             <label style={{ display: "block", flex: "1 1 170px" }}>
@@ -280,7 +289,7 @@ export function TrainingPlanSection({
                   marginBottom: 4,
                 }}
               >
-                Racedate
+                {t.raceDate}
               </span>
               <input
                 type="date"
@@ -302,17 +311,17 @@ export function TrainingPlanSection({
               />
             </label>
             <Field
-              label="Strecke (km)"
+              label={t.distanceKm}
               value={distanceKm}
               onChange={setDistanceKm}
-              placeholder={sport === "ride" ? "z. B. 120" : "z. B. 10"}
+              placeholder={t.egDistance(sport)}
               flex="1 1 130px"
             />
             <Field
-              label="Zielzeit"
+              label={t.targetTime}
               value={targetTime}
               onChange={setTargetTime}
-              placeholder={sport === "ride" ? "z. B. 3:30:00" : "z. B. 45:00"}
+              placeholder={t.egTime(sport)}
               flex="1 1 150px"
             />
           </div>
@@ -333,11 +342,11 @@ export function TrainingPlanSection({
               textTransform: "uppercase",
             }}
           >
-            {busy ? "Erstelle Plan …" : "Plan erstellen"}
+            {busy ? t.creatingPlan : t.createPlan}
           </button>
           {busy && (
             <span style={{ marginLeft: 12, color: T.dim, fontSize: 13 }}>
-              Der Coach plant deine Wochen, das dauert etwa eine halbe Minute …
+              {t.planWait}
             </span>
           )}
         </>
@@ -350,7 +359,7 @@ export function TrainingPlanSection({
         <>
           <p style={{ color: T.dim, fontSize: 14, margin: "0 0 6px", lineHeight: 1.5 }}>
             <span style={{ color: T.gold, fontWeight: 600 }}>
-              {plan.distanceKm} km am {plan.raceDate}, Ziel {fmtTargetTime(plan.targetTimeS)}
+              {t.planSummary(plan.distanceKm, plan.raceDate, fmtTargetTime(plan.targetTimeS))}
             </span>
             {" · "}
             {plan.summary}
@@ -368,10 +377,13 @@ export function TrainingPlanSection({
               }}
             >
               <span>
-                {progress.doneDue} von {progress.due} fälligen Einheiten absolviert
-                {progress.due > 0 ? ` (${progress.pct} %)` : ""}
+                {t.planProgress(
+                  progress.doneDue,
+                  progress.due,
+                  progress.due > 0 ? ` (${progress.pct} %)` : ""
+                )}
               </span>
-              <span>{progress.total} Einheiten gesamt</span>
+              <span>{t.planTotal(progress.total)}</span>
             </div>
             <div style={{ background: T.line, borderRadius: 999, height: 8, overflow: "hidden" }}>
               <div
@@ -398,7 +410,7 @@ export function TrainingPlanSection({
                 }}
               >
                 <span />
-                {WEEKDAYS_DE.map((d) => (
+                {t.weekdays.map((d) => (
                   <span
                     key={d}
                     style={{
@@ -447,7 +459,7 @@ export function TrainingPlanSection({
                         </div>
                         {cell.workouts.map((w) => {
                           const done = isWorkoutDone(w, plan.sport, activities, manual);
-                          const st = TYPE_STYLE[w.type];
+                          const stColor = TYPE_COLOR[w.type];
                           const isSel = selected && workoutKey(selected) === workoutKey(w);
                           return (
                             <button
@@ -459,9 +471,9 @@ export function TrainingPlanSection({
                                 display: "block",
                                 width: "100%",
                                 textAlign: "left",
-                                background: w.type === "race" ? T.gold : st.color + "26",
-                                color: w.type === "race" ? "#1A1608" : st.color,
-                                border: `1px solid ${isSel ? T.text : st.color + "66"}`,
+                                background: w.type === "race" ? T.gold : stColor + "26",
+                                color: w.type === "race" ? "#1A1608" : stColor,
+                                border: `1px solid ${isSel ? T.text : stColor + "66"}`,
                                 borderRadius: 6,
                                 padding: "3px 6px",
                                 fontSize: 11.5,
@@ -489,9 +501,9 @@ export function TrainingPlanSection({
 
           {/* Legende */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: "8px 0 0" }}>
-            {(Object.keys(TYPE_STYLE) as WorkoutType[]).map((t) => (
-              <span key={t} style={{ color: TYPE_STYLE[t].color, fontSize: 12 }}>
-                ● {TYPE_STYLE[t].label}
+            {(Object.keys(TYPE_COLOR) as WorkoutType[]).map((wt) => (
+              <span key={wt} style={{ color: TYPE_COLOR[wt], fontSize: 12 }}>
+                ● {typeLabel[wt]}
               </span>
             ))}
           </div>
@@ -517,8 +529,8 @@ export function TrainingPlanSection({
                 }}
               >
                 <div style={{ fontWeight: 600, fontSize: 15 }}>
-                  <span style={{ color: TYPE_STYLE[selected.type].color }}>
-                    {TYPE_STYLE[selected.type].label}
+                  <span style={{ color: TYPE_COLOR[selected.type] }}>
+                    {typeLabel[selected.type]}
                   </span>{" "}
                   · {selected.title}
                   <span style={{ ...mono, color: T.dim, fontSize: 13, marginLeft: 10 }}>
@@ -545,8 +557,8 @@ export function TrainingPlanSection({
                     }}
                   >
                     {isWorkoutDone(selected, plan.sport, activities, manual)
-                      ? "✓ Erledigt (zurücksetzen)"
-                      : "Als erledigt markieren"}
+                      ? t.doneReset
+                      : t.markDone}
                   </button>
                 )}
               </div>
@@ -557,10 +569,7 @@ export function TrainingPlanSection({
           )}
 
           <p style={{ color: T.faint, fontSize: 12, margin: "10px 0 0", lineHeight: 1.5 }}>
-            Einheiten werden automatisch abgehakt, wenn an dem Tag eine passende{" "}
-            {plan.sport === "ride" ? "Fahrt" : "Lauf"}-Aktivität mit mindestens der halben
-            geplanten Dauer auf Strava liegt ("Aktualisieren" lädt neue Aktivitäten). Manuelles
-            Abhaken übersteuert das. Plan und Fortschritt liegen nur in diesem Browser.
+            {t.planFootnote(plan.sport)}
           </p>
         </>
       )}

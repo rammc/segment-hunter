@@ -1,10 +1,6 @@
 import { T, display } from "../theme";
+import { useI18n } from "../lib/i18n";
 import type { Sport } from "../lib/types";
-
-const OPTIONS: Array<{ value: Sport; label: string }> = [
-  { value: "ride", label: "Rad" },
-  { value: "run", label: "Laufen" },
-];
 
 export function SportToggle({
   sport,
@@ -15,10 +11,15 @@ export function SportToggle({
   onChange: (s: Sport) => void;
   disabled?: boolean;
 }) {
+  const { t } = useI18n();
+  const OPTIONS: Array<{ value: Sport; label: string }> = [
+    { value: "ride", label: t.sportRide },
+    { value: "run", label: t.sportRun },
+  ];
   return (
     <div
       role="group"
-      aria-label="Sportart"
+      aria-label={t.sportGroup}
       style={{
         display: "inline-flex",
         border: `1px solid ${T.line}`,

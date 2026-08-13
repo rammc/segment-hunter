@@ -9,6 +9,7 @@ import {
   parseKomTime,
   physicsKomWatts,
 } from "../lib/scoring";
+import { useI18n } from "../lib/i18n";
 import type { CurvePoint, Feasibility, Sport } from "../lib/types";
 import { KomBadge } from "./KomBadge";
 import { Spinner } from "./Spinner";
@@ -38,6 +39,7 @@ export function NearbySegments({
   sport: Sport;
   weight: number;
 }) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [segments, setSegments] = useState<NearbySegment[] | null>(null);
@@ -45,15 +47,13 @@ export function NearbySegments({
   function locate(): Promise<GeolocationPosition> {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
-        reject(new Error("Dieser Browser unterstützt keine Standortabfrage."));
+        reject(new Error(t.errNoGeolocation));
         return;
       }
       navigator.geolocation.getCurrentPosition(resolve, (err) =>
         reject(
           new Error(
-            err.code === err.PERMISSION_DENIED
-              ? "Standortfreigabe abgelehnt. In den Browser-Einstellungen erlauben."
-              : "Standort konnte nicht ermittelt werden."
+            err.code === err.PERMISSION_DENIED ? t.errGeoDenied : t.errGeoFailed
           )
         ),
         { timeout: 15000 }
@@ -122,7 +122,7 @@ export function NearbySegments({
       detailed.sort((a, b) => (b.feas?.ratio ?? -1) - (a.feas?.ratio ?? -1));
       setSegments(detailed);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Suche fehlgeschlagen.");
+      setError(e instanceof Error ? e.message : t.errSearch);
     } finally {
       setBusy(false);
     }
@@ -158,7 +158,7 @@ export function NearbySegments({
             color: T.dim,
           }}
         >
-          {sport === "ride" ? "KOMs" : "CRs"} in deiner Nähe
+          {t.nearbyTitle(sport === "ride" ? "KOM" : "CR")}
         </h2>
         <button
           onClick={search}
@@ -175,19 +175,19 @@ export function NearbySegments({
             ...body,
           }}
         >
-          {busy ? "Suche …" : "📍 Standort verwenden"}
+          {busy ? t.searching : t.useLocation}
         </button>
       </div>
 
       {busy && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, color: T.dim, fontSize: 14 }}>
-          <Spinner /> Suche Segmente im Umkreis von etwa 5 km …
+          <Spinner /> {t.searchingRadius}
         </div>
       )}
       {error && <p style={{ color: T.red, margin: 0 }}>{error}</p>}
       {segments && segments.length === 0 && (
         <p style={{ color: T.dim, margin: 0, fontSize: 14 }}>
-          Keine Segmente in der Nähe gefunden.
+          {t.nearbyEmpty}
         </p>
       )}
 
@@ -231,15 +231,15 @@ export function NearbySegments({
                       {sport === "ride" ? "KOM" : "CR"} {fmtTime(s.komTime)}
                     </span>
                   )}
-                  {s.athleteCount != null && <span>{s.athleteCount} Athleten</span>}
+                  {s.athleteCount != null && <span>{t.athletes(s.athleteCount)}</span>}
                   {s.feas?.need != null && s.feas?.have != null && (
                     <span style={{ color: s.feas.status === "attack" ? T.gold : T.teal }}>
                       {sport === "ride"
-                        ? `benötigt ≈${Math.round(s.feas.need)} W, du hast ${Math.round(s.feas.have)} W`
-                        : `benötigt ${fmtPace(s.feas.need)}, du kannst ${fmtPace(s.feas.have)}`}
+                        ? t.needHaveWatts(Math.round(s.feas.need), Math.round(s.feas.have))
+                        : t.needHavePace(fmtPace(s.feas.need), fmtPace(s.feas.have))}
                     </span>
                   )}
-                  {!s.feas && <span style={{ color: T.faint }}>[keine Bewertung möglich]</span>}
+                  {!s.feas && <span style={{ color: T.faint }}>{t.noAssessment}</span>}
                 </div>
               </div>
               <a
@@ -247,7 +247,7 @@ export function NearbySegments({
                 target="_blank"
                 rel="noreferrer"
                 style={{ color: T.faint, fontSize: 12, textDecoration: "none", ...mono }}
-                aria-label={`Segment ${s.name} auf Strava öffnen`}
+                aria-label={t.openOnStrava(s.name)}
               >
                 Strava ↗
               </a>
@@ -258,8 +258,7 @@ export function NearbySegments({
 
       {segments && sport === "ride" && segments.length > 0 && (
         <p style={{ color: T.faint, fontSize: 12, margin: "10px 0 0", lineHeight: 1.5 }}>
-          Bewertung über Physikmodell (Roll- und Luftwiderstand, Steigung, {weight} kg plus 9 kg
-          Rad). Ohne eigenen Effort ist das eine grobe Schätzung, besonders im Flachen.
+          {t.physicsNote(weight)}
         </p>
       )}
     </section>

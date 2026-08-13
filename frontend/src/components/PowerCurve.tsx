@@ -1,5 +1,6 @@
 import { T, mono } from "../theme";
 import { fmtPace, fmtTime } from "../lib/scoring";
+import { useI18n } from "../lib/i18n";
 import type { CurvePoint, Sport } from "../lib/types";
 
 /** Rad: Watt ueber Dauer. Laufen: Geschwindigkeit (angezeigt als Pace) ueber Dauer. */
@@ -12,6 +13,7 @@ export function PowerCurve({
   weight: number;
   sport?: Sport;
 }) {
+  const { t } = useI18n();
   if (!curve.length) return null;
   const sorted = [...curve].sort((a, b) => a[0] - b[0]);
   const W = 560,
@@ -39,7 +41,7 @@ export function PowerCurve({
       viewBox={`0 0 ${W} ${H}`}
       style={{ width: "100%", height: "auto" }}
       role="img"
-      aria-label={sport === "ride" ? "Power-Kurve" : "Pace-Kurve"}
+      aria-label={t.curveAria(sport)}
     >
       {ticks.map((s) => (
         <g key={s}>

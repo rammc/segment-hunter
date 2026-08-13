@@ -86,6 +86,11 @@ und ist mit Vitest getestet.
   KOM-Dauer.
 - **Badges**: KOM gehalten / in Reichweite (ratio >= 0.97) /
   mit Training machbar (0.85 bis 0.97) / ausser Reichweite.
+- **Abfahrten**: Segmente mit Durchschnittssteigung unter -1 % bekommen
+  keine Machbarkeits-Bewertung und keine Watt-Reserve im Hunt-Score,
+  stattdessen einen ABFAHRT-Badge. Abfahrts-KOMs haengen an
+  Abfahrtskoennen und Aerodynamik, das Steigungsmodell wuerde dort absurd
+  niedrige benoetigte Watt liefern.
 - **Datenqualitaet**: Efforts mit Watt < 30 oder Dauer < 30 s werden als
   geringe Datenqualitaet markiert und nicht gescored.
 - **Kurven-Grafik**: dargestellt wird die auf Eckpunkte ausgeduennte Kurve

@@ -12,6 +12,7 @@ import {
   ftpCurvePoints,
   huntScore,
   interpolateAt,
+  isDescent,
   komFeasibility,
   parseKomTime,
   riegelEfforts,
@@ -922,7 +923,10 @@ export default function SegmentHunter() {
                         <span style={{ fontWeight: 600, fontSize: 16 }}>{s.name}</span>
                         {s.rank != null && s.rank <= 10 && <Crown size={14} />}
                         <KomBadge feas={s.feas} />
+                        {sport === "ride" && isDescent(s) && <DescentBadge label={t.badgeDescent} />}
                       </div>
+
+                      {/* Zeile A: Segment- und PB-Basisdaten */}
                       <div
                         style={{
                           ...mono,
@@ -936,6 +940,7 @@ export default function SegmentHunter() {
                       >
                         <span>{(s.dist / 1000).toFixed(2)} km</span>
                         <span>{s.elev} hm</span>
+                        <span>{fmtGrade(s.avgGrade, s.dist, s.elev)}</span>
                         <span>PB {fmtTime(s.time)}</span>
                         <span>
                           {sport === "ride"
@@ -952,19 +957,7 @@ export default function SegmentHunter() {
                         {s.prRank != null && s.rank == null && (
                           <span style={{ color: T.gold }}>{t.prRank(s.prRank)}</span>
                         )}
-                        {s.komTime && s.komTime < s.time && (
-                          <span style={{ color: T.gold }}>
-                            {crLabel} {fmtTime(s.komTime)} (−{fmtTime(s.time - s.komTime)})
-                          </span>
-                        )}
-                        {s.feas?.need != null && s.feas?.have != null && s.feas.status !== "kom" && (
-                          <span style={{ color: s.feas.status === "attack" ? T.gold : T.teal }}>
-                            {sport === "ride"
-                              ? t.needHaveWatts(Math.round(s.feas.need), Math.round(s.feas.have))
-                              : t.needHavePace(fmtPace(s.feas.need), fmtPace(s.feas.have))}
-                          </span>
-                        )}
-                        {!s.feas && s.ref && s.reliable && sport === "ride" && s.ref > s.watts && (
+                        {!s.feas && s.ref && s.reliable && sport === "ride" && !isDescent(s) && s.ref > s.watts && (
                           <span style={{ color: T.teal }}>
                             {t.reserve(Math.round(s.ref - s.watts))}
                           </span>
@@ -973,6 +966,51 @@ export default function SegmentHunter() {
                           <span style={{ color: T.faint }}>{t.lowQuality}</span>
                         )}
                       </div>
+
+                      {/* Zeile B: KOM-Referenz und Machbarkeit */}
+                      {s.komTime != null && s.komTime > 0 && s.komTime < s.time && (
+                        <div
+                          style={{
+                            ...mono,
+                            color: T.dim,
+                            fontSize: 13,
+                            display: "flex",
+                            flexWrap: "wrap",
+                            alignItems: "center",
+                            gap: "4px 14px",
+                            marginTop: 4,
+                          }}
+                        >
+                          <span style={{ color: T.gold }}>
+                            {crLabel} {fmtTime(s.komTime)} ·{" "}
+                            {sport === "ride"
+                              ? `${((s.dist / s.komTime) * 3.6).toFixed(1)} km/h`
+                              : fmtPace(s.dist / s.komTime)}{" "}
+                            (−{fmtTime(s.time - s.komTime)})
+                          </span>
+                          {sport === "ride" && isDescent(s) ? (
+                            <span style={{ color: T.faint }}>{t.descentNote}</span>
+                          ) : (
+                            s.feas?.need != null &&
+                            s.feas?.have != null &&
+                            s.feas.status !== "kom" && (
+                              <>
+                                <span
+                                  style={{ color: s.feas.status === "attack" ? T.gold : T.teal }}
+                                >
+                                  {sport === "ride"
+                                    ? t.needHaveWatts(
+                                        Math.round(s.feas.need),
+                                        Math.round(s.feas.have)
+                                      )
+                                    : t.needHavePace(fmtPace(s.feas.need), fmtPace(s.feas.have))}
+                                </span>
+                                <FeasBar ratio={s.feas.ratio} />
+                              </>
+                            )
+                          )}
+                        </div>
+                      )}
                     </div>
                     <a
                       href={`https://www.strava.com/segments/${s.id}`}
@@ -1029,6 +1067,73 @@ export default function SegmentHunter() {
         )}
       </main>
     </div>
+  );
+}
+
+/** Signierte Durchschnittssteigung; Fallback unsigned aus hm/Distanz */
+function fmtGrade(avgGrade: number | null | undefined, dist: number, elev: number): string {
+  const g = avgGrade ?? (dist > 0 ? (elev / dist) * 100 : 0);
+  return `${g > 0 ? "+" : ""}${g.toFixed(1)} %`;
+}
+
+/** Grauer Hinweis-Badge fuer Abfahrts-Segmente */
+function DescentBadge({ label }: { label: string }) {
+  return (
+    <span
+      style={{
+        ...display,
+        background: T.line,
+        color: T.dim,
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 0.8,
+        padding: "3px 8px",
+        borderRadius: 4,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
+ * Kompakter Machbarkeits-Balken: have/need-Verhaeltnis, Skala bis 120 %,
+ * weisser Tick bei 100 % (= KOM-Niveau).
+ */
+function FeasBar({ ratio }: { ratio: number }) {
+  const pct = (Math.max(0, Math.min(ratio, 1.2)) / 1.2) * 100;
+  const color = ratio >= 0.97 ? T.gold : ratio >= 0.85 ? T.teal : T.faint;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span
+        style={{
+          position: "relative",
+          width: 64,
+          height: 5,
+          background: T.line,
+          borderRadius: 999,
+          overflow: "hidden",
+          display: "inline-block",
+        }}
+      >
+        <span
+          style={{ display: "block", width: `${pct}%`, height: "100%", background: color }}
+        />
+        <span
+          style={{
+            position: "absolute",
+            left: `${(1 / 1.2) * 100}%`,
+            top: 0,
+            width: 1.5,
+            height: "100%",
+            background: T.text,
+            opacity: 0.7,
+          }}
+        />
+      </span>
+      <span style={{ color, fontSize: 12 }}>{Math.round(ratio * 100)} %</span>
+    </span>
   );
 }
 
@@ -1142,6 +1247,7 @@ function mergeSegmentEntry(
     name: seg.name || effort.name,
     dist: Math.round(seg.distance),
     elev: Math.round(Math.max(0, seg.elevation_high - seg.elevation_low) * 10) / 10,
+    avgGrade: seg.average_grade ?? prev?.avgGrade ?? null,
     time: Math.round(effort.moving_time),
     watts,
     rank: effort.kom_rank ?? prev?.rank ?? null,

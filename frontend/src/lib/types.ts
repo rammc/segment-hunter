@@ -95,7 +95,8 @@ export interface SegmentEntry {
   id: string;
   name: string;
   dist: number; // m
-  elev: number; // Hoehenmeter (elevation_high - elevation_low)
+  elev: number; // Hoehenmeter (elevation_high - elevation_low, immer >= 0)
+  avgGrade?: number | null; // signierte durchschnittliche Steigung in % (negativ = Abfahrt)
   time: number; // beste eigene Zeit in s
   watts: number; // Durchschnittswatt des besten Efforts
   rank: number | null; // kom_rank (1..10), sonst null

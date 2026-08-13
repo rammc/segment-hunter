@@ -85,6 +85,11 @@ and is covered by Vitest.
   in between), compared with the power curve at the KOM duration.
 - **Badges**: KOM held / within reach (ratio >= 0.97) /
   trainable (0.85 to 0.97) / out of reach.
+- **Descents**: segments with an average grade below -1 % get no feasibility
+  score and no watt reserve in the hunt score; they are flagged with a
+  DESCENT badge instead. Downhill KOMs depend on descending skill and
+  aerodynamics, the gradient model would produce absurdly low required
+  watts there.
 - **Data quality**: efforts with watts < 30 or duration < 30 s are flagged
   as low data quality and not scored.
 - **Curve chart**: the displayed curve is thinned to its corner points

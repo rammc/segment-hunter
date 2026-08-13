@@ -97,6 +97,8 @@ const de = {
   badgeAttack: "KOM IN REICHWEITE",
   badgeTrain: "MIT TRAINING MACHBAR",
   badgeFar: "AUSSER REICHWEITE",
+  badgeDescent: "ABFAHRT",
+  descentNote: "KOM hängt an Abfahrtskönnen und Aerodynamik, keine Watt-Bewertung",
 
   /* Sport-Toggle */
   sportRide: "Rad",
@@ -266,6 +268,8 @@ const en: Messages = {
   badgeAttack: "KOM WITHIN REACH",
   badgeTrain: "TRAINABLE",
   badgeFar: "OUT OF REACH",
+  badgeDescent: "DESCENT",
+  descentNote: "the KOM depends on descending skill and aerodynamics, no watt assessment",
 
   sportRide: "Ride",
   sportRun: "Run",

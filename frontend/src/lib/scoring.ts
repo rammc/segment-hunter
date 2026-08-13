@@ -23,6 +23,18 @@ export const MIN_RELIABLE_WATTS = 30;
 export const MIN_RELIABLE_TIME = 30;
 
 /**
+ * Ab dieser (signierten) Durchschnittssteigung gilt ein Segment als Abfahrt.
+ * Abfahrts-KOMs haengen an Abfahrtskoennen, Aerodynamik und Risikobereitschaft,
+ * nicht an Watt: das Steigungsmodell wuerde absurd niedrige "benoetigte Watt"
+ * liefern (eigene Rollwatt hochskaliert), deshalb keine Machbarkeits-Bewertung.
+ */
+export const DESCENT_MAX_GRADE = -1;
+
+export function isDescent(seg: Pick<SegmentEntry, "avgGrade">): boolean {
+  return seg.avgGrade != null && seg.avgGrade < DESCENT_MAX_GRADE;
+}
+
+/**
  * Kurve an einer Dauer auslesen, ohne Rundung (log-Interpolation zwischen
  * Stuetzstellen). Fuer Pace-Kurven (m/s) wichtig, wo Rundung alles zerstoert.
  */
@@ -80,12 +92,14 @@ export function requiredWattsForKom(
  * 30 % Rang-Bonus. Ohne bekannten Rang gibt es einen neutralen Bonus von 0.3.
  */
 export function huntScore(
-  seg: Pick<SegmentEntry, "time" | "watts" | "rank">,
+  seg: Pick<SegmentEntry, "time" | "watts" | "rank" | "avgGrade">,
   curve: CurvePoint[]
 ): HuntScore {
   const ref = curveAt(curve, seg.time);
   let headroom = 0;
-  if (ref && seg.watts > MIN_RELIABLE_WATTS) headroom = Math.max(0, (ref - seg.watts) / ref);
+  // Abfahrten: die Watt-Reserve sagt nichts ueber die Angriffschance aus
+  if (ref && seg.watts > MIN_RELIABLE_WATTS && !isDescent(seg))
+    headroom = Math.max(0, (ref - seg.watts) / ref);
   const rankBonus =
     seg.rank != null ? Math.max(0, Math.min(1, (60 - seg.rank) / 60)) : 0.3;
   const reliable = seg.watts > MIN_RELIABLE_WATTS && seg.time >= MIN_RELIABLE_TIME;
@@ -98,11 +112,12 @@ export function huntScore(
  * Badges: kom (gehalten), attack (>= 0.97), train (0.85 bis 0.97), far (darunter).
  */
 export function komFeasibility(
-  seg: Pick<SegmentEntry, "komTime" | "time" | "watts" | "dist" | "elev">,
+  seg: Pick<SegmentEntry, "komTime" | "time" | "watts" | "dist" | "elev" | "avgGrade">,
   curve: CurvePoint[]
 ): Feasibility | null {
   if (!seg.komTime) return null;
   if (seg.komTime >= seg.time) return { status: "kom", ratio: 1 };
+  if (isDescent(seg)) return null;
   const need = requiredWattsForKom(seg, seg.komTime);
   const have = curveAt(curve, seg.komTime);
   if (!need || !have) return null;

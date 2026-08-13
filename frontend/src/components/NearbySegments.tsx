@@ -61,9 +61,17 @@ export function NearbySegments({
     });
   }
 
-  /* Machbarkeit ohne eigenen Effort: Rad ueber Physikmodell, Laufen ueber Pace */
-  function feasibilityFor(dist: number, elev: number, komTime: number | null): Feasibility | null {
+  /* Machbarkeit ohne eigenen Effort: Rad ueber Physikmodell, Laufen ueber Pace.
+     Abfahrten (negatives Durchschnittsgefaelle) werden nicht bewertet, dort
+     entscheidet Abfahrtskoennen statt Watt. */
+  function feasibilityFor(
+    dist: number,
+    elev: number,
+    komTime: number | null,
+    grade: number
+  ): Feasibility | null {
     if (!komTime || komTime <= 0) return null;
+    if (sport === "ride" && grade < -1) return null;
     let need: number | null;
     let have: number | null;
     if (sport === "ride") {
@@ -115,7 +123,7 @@ export function NearbySegments({
             elev,
             komTime,
             athleteCount,
-            feas: feasibilityFor(s.distance, elev, komTime),
+            feas: feasibilityFor(s.distance, elev, komTime, s.avg_grade),
           } satisfies NearbySegment;
         })
       );
@@ -239,7 +247,11 @@ export function NearbySegments({
                         : t.needHavePace(fmtPace(s.feas.need), fmtPace(s.feas.have))}
                     </span>
                   )}
-                  {!s.feas && <span style={{ color: T.faint }}>{t.noAssessment}</span>}
+                  {!s.feas && (
+                    <span style={{ color: T.faint }}>
+                      {sport === "ride" && s.grade < -1 ? t.descentNote : t.noAssessment}
+                    </span>
+                  )}
                 </div>
               </div>
               <a

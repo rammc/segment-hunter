@@ -128,3 +128,45 @@ export interface CoachTarget {
   pacing: string;
   targetWatts: string;
 }
+
+/* ---------- Kurven-Provenienz (Stuetzpunkte der Power-/Pace-Kurve) ---------- */
+
+/** Referenz auf die Aktivitaet, aus der ein Kurvenwert stammt */
+export interface ActivityRef {
+  id: number;
+  name: string;
+  date: string; // YYYY-MM-DD
+}
+
+export type SupportKind = "stream" | "effort" | "ftp";
+
+/** Bester Wert je Standard-Dauer inklusive Herkunft */
+export interface CurveSupport {
+  sec: number;
+  value: number; // Watt (Rad) oder m/s (Laufen)
+  kind: SupportKind;
+  activity: ActivityRef | null;
+}
+
+/** Effort-Punkt mit Herkunft (Rad: [Dauer, Watt] aus Segment-Efforts) */
+export interface TaggedPoint {
+  sec: number;
+  value: number;
+  activity: ActivityRef | null;
+}
+
+/** Lauf-Effort mit Herkunft */
+export interface TaggedRunEffort {
+  distance: number;
+  moving_time: number;
+  activity?: ActivityRef | null;
+}
+
+/** KOM-/CR-Ziel als Overlay-Punkt in der Kurven-Grafik */
+export interface TargetMark {
+  name: string;
+  sec: number; // KOM-/CR-Dauer
+  value: number; // benoetigte Watt bzw. m/s
+  have: number; // eigener Kurvenwert auf der Dauer
+  feasible: boolean;
+}

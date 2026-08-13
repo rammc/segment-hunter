@@ -87,6 +87,13 @@ and is covered by Vitest.
   trainable (0.85 to 0.97) / out of reach.
 - **Data quality**: efforts with watts < 30 or duration < 30 s are flagged
   as low data quality and not scored.
+- **Curve chart**: the displayed curve is thinned to its corner points
+  (`displayCurve`), with markers only on the standard durations. Solid means
+  measured from watt streams, dashed means estimated (effort fallback/FTP
+  anchor for rides, Riegel extrapolation for runs). KOM/CR targets are
+  overlaid as dots (gold = within reach) and a support table below the
+  chart links each best value to the Strava activity it came from
+  (`curveSupports`/`speedSupports`).
 
 ## Repo structure
 

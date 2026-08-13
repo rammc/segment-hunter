@@ -1,4 +1,12 @@
-import type { CurvePoint, Feasibility, HuntScore, SegmentEntry } from "./types";
+import type {
+  CurvePoint,
+  CurveSupport,
+  Feasibility,
+  HuntScore,
+  SegmentEntry,
+  TaggedPoint,
+  TaggedRunEffort,
+} from "./types";
 
 /* ============================================================
    Fachlogik (aus dem Prototyp extrahiert)
@@ -163,6 +171,7 @@ export function maxAvgPower(
 export interface StreamInput {
   time: number[];
   watts: (number | null)[];
+  activity?: import("./types").ActivityRef | null;
 }
 
 /**
@@ -368,4 +377,119 @@ export function physicsKomWatts(
   const watts = (rolling + climbing + aero) / DRIVETRAIN_EFF;
   if (!Number.isFinite(watts) || watts <= 0) return null;
   return Math.round(watts);
+}
+
+/* ---------- Kurven-Darstellung: Ausduennung und Stuetzpunkte ---------- */
+
+/**
+ * Kurve fuer die Darstellung ausduennen: die Monotonie-Korrektur in
+ * buildPowerCurve klemmt schwaechere Efforts auf das Envelope-Niveau,
+ * wodurch hunderte Punkte auf horizontalen Plateaus liegen. Behalten wird
+ * ein Punkt nur, wenn er mehr als `tol` (relativ) von der log-linearen
+ * Interpolation zwischen dem zuletzt behaltenen und dem naechsten Punkt
+ * abweicht. Erster und letzter Punkt bleiben immer. Nur fuer die Anzeige;
+ * das Scoring nutzt weiterhin die volle Kurve.
+ */
+export function displayCurve(points: CurvePoint[], tol = 0.005): CurvePoint[] {
+  if (points.length <= 2) return points;
+  const sorted = [...points].sort((a, b) => a[0] - b[0]);
+  const keep: CurvePoint[] = [sorted[0]];
+  for (let i = 1; i < sorted.length - 1; i++) {
+    const a = keep[keep.length - 1];
+    const b = sorted[i + 1];
+    const p = sorted[i];
+    const span = Math.log(b[0]) - Math.log(a[0]);
+    const f = span > 0 ? (Math.log(p[0]) - Math.log(a[0])) / span : 0;
+    const est = a[1] + f * (b[1] - a[1]);
+    if (Math.abs(est - p[1]) > tol * Math.max(1, p[1])) keep.push(p);
+  }
+  keep.push(sorted[sorted.length - 1]);
+  return keep;
+}
+
+/**
+ * Stuetzpunkte der Power-Kurve: pro Standard-Dauer der beste Wert samt
+ * Herkunft (Watt-Stream, Effort-Fallback oder FTP-Anker). Efforts zaehlen
+ * fuer alle kuerzeren Dauern als Untergrenze, gleiche Monotonie-Logik wie
+ * buildPowerCurve.
+ */
+export function curveSupports(
+  streams: StreamInput[],
+  efforts: TaggedPoint[],
+  ftp: number | null | undefined,
+  durations: number[] = CURVE_DURATIONS
+): CurveSupport[] {
+  const ftpPts = ftpCurvePoints(ftp);
+  const out: CurveSupport[] = [];
+  for (const d of durations) {
+    let best: CurveSupport | null = null;
+    const consider = (
+      value: number,
+      kind: CurveSupport["kind"],
+      activity: CurveSupport["activity"]
+    ) => {
+      if (value > 0 && (!best || value > best.value)) best = { sec: d, value, kind, activity };
+    };
+    for (const s of streams) {
+      const w = maxAvgPower(s.time, s.watts, d);
+      if (w !== null) consider(w, "stream", s.activity ?? null);
+    }
+    for (const e of efforts) {
+      if (e.sec >= d) consider(e.value, "effort", e.activity ?? null);
+    }
+    for (const [sec, w] of ftpPts) {
+      if (sec >= d) consider(w, "ftp", null);
+    }
+    if (best) out.push(best);
+  }
+  return out;
+}
+
+/**
+ * Stuetzpunkte der Pace-Kurve: pro Standard-Dauer der schnellste echte
+ * Effort (Riegel-Extrapolationen sind bewusst nicht dabei, die Tabelle
+ * zeigt nur gelaufene Einheiten).
+ */
+export function speedSupports(
+  efforts: TaggedRunEffort[],
+  durations: number[] = CURVE_DURATIONS
+): CurveSupport[] {
+  const out: CurveSupport[] = [];
+  for (const d of durations) {
+    let best: CurveSupport | null = null;
+    for (const e of efforts) {
+      if (!e || !Number.isFinite(e.distance) || !Number.isFinite(e.moving_time)) continue;
+      if (e.moving_time < MIN_RELIABLE_TIME || e.distance < MIN_RUN_EFFORT_DIST) continue;
+      if (e.moving_time < d) continue;
+      const speed = e.distance / e.moving_time;
+      if (!best || speed > best.value) {
+        best = { sec: d, value: speed, kind: "effort", activity: e.activity ?? null };
+      }
+    }
+    if (best) out.push(best);
+  }
+  return out;
+}
+
+/**
+ * Ab welcher Dauer die Kurve nicht mehr durch Messwerte gedeckt ist:
+ * Rad = erster Stuetzpunkt, der nicht aus einem Watt-Stream kommt;
+ * Laufen = erste Dauer, auf der die Kurve (inkl. Riegel) mehr als `tol`
+ * ueber dem besten echten Effort liegt. null = alles gedeckt.
+ */
+export function estimatedFromSec(
+  curve: CurvePoint[],
+  supports: CurveSupport[],
+  sport: "ride" | "run",
+  tol = 0.01
+): number | null {
+  for (const s of supports) {
+    if (sport === "ride") {
+      if (s.kind !== "stream") return s.sec;
+    } else {
+      const cv = interpolateAt(curve, s.sec);
+      if (cv !== null && cv > s.value * (1 + tol)) return s.sec;
+    }
+  }
+  return null;
 }

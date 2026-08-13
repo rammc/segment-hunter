@@ -5,6 +5,8 @@ import {
   buildPowerCurve,
   buildSpeedCurve,
   curveAt,
+  curveSupports,
+  estimatedFromSec,
   fmtPace,
   fmtTime,
   ftpCurvePoints,
@@ -15,18 +17,24 @@ import {
   riegelEfforts,
   runFeasibility,
   runHuntScore,
+  speedSupports,
 } from "./lib/scoring";
 import type { StreamInput } from "./lib/scoring";
 import { BEHAVIOR_WINDOW_DAYS } from "./lib/plan";
 import type {
+  ActivityRef,
   CoachTarget,
   CurvePoint,
+  CurveSupport,
   DetailedActivity,
   Feasibility,
   HuntScore,
   SegmentEntry,
   Sport,
   SummaryActivity,
+  TaggedPoint,
+  TaggedRunEffort,
+  TargetMark,
 } from "./lib/types";
 import { useI18n } from "./lib/i18n";
 import { Crown } from "./components/Crown";
@@ -35,6 +43,7 @@ import { ScoreDial } from "./components/ScoreDial";
 import { KomBadge } from "./components/KomBadge";
 import { Field } from "./components/Field";
 import { PowerCurve } from "./components/PowerCurve";
+import { CurveSupportTable } from "./components/CurveSupportTable";
 import { SportToggle } from "./components/SportToggle";
 import { LangToggle } from "./components/LangToggle";
 import { NearbySegments } from "./components/NearbySegments";
@@ -72,8 +81,8 @@ interface DataStore {
   candidates: SummaryActivity[];
   analyzed: number; // Index in candidates, bis wohin analysiert wurde
   streams: StreamInput[];
-  wattPoints: CurvePoint[];
-  runEfforts: Array<{ distance: number; moving_time: number }>;
+  wattPoints: TaggedPoint[];
+  runEfforts: TaggedRunEffort[];
   segMap: Map<string, SegmentEntry>;
   komChecked: Set<string>;
   komFound: number;
@@ -89,6 +98,8 @@ export default function SegmentHunter() {
   const [recentActivities, setRecentActivities] = useState<SummaryActivity[]>([]);
   const [segments, setSegments] = useState<SegmentEntry[]>([]);
   const [curve, setCurve] = useState<CurvePoint[]>([]);
+  const [supports, setSupports] = useState<CurveSupport[]>([]);
+  const [estFrom, setEstFrom] = useState<number | null>(null);
   const [ai, setAi] = useState<CoachTarget[] | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [coachAvailable, setCoachAvailable] = useState(false);
@@ -127,7 +138,10 @@ export default function SegmentHunter() {
 
   function buildCurveFor(store: DataStore): CurvePoint[] {
     return store.sport === "ride"
-      ? buildPowerCurve(store.streams, [...store.wattPoints, ...ftpCurvePoints(store.ftp)])
+      ? buildPowerCurve(store.streams, [
+          ...store.wattPoints.map((p) => [p.sec, p.value] as CurvePoint),
+          ...ftpCurvePoints(store.ftp),
+        ])
       : // Riegel-Punkte verankern das lange Ende als Rennpotenzial statt Trainingstempo
         buildSpeedCurve([...store.runEfforts, ...riegelEfforts(store.runEfforts)]);
   }
@@ -159,7 +173,11 @@ export default function SegmentHunter() {
         if (store.sport === "ride") {
           collectRideActivity(activity, store.segMap, store.wattPoints);
           if (streamSet?.watts?.data?.length && streamSet?.time?.data?.length) {
-            store.streams.push({ time: streamSet.time.data, watts: streamSet.watts.data });
+            store.streams.push({
+              time: streamSet.time.data,
+              watts: streamSet.watts.data,
+              activity: activityRef(activity),
+            });
           }
         } else {
           collectRunActivity(activity, store.segMap, store.runEfforts);
@@ -214,6 +232,12 @@ export default function SegmentHunter() {
   function publish(store: DataStore, curvePoints: CurvePoint[]) {
     setSegments([...store.segMap.values()]);
     setCurve(curvePoints);
+    const sup =
+      store.sport === "ride"
+        ? curveSupports(store.streams, store.wattPoints, store.ftp)
+        : speedSupports(store.runEfforts);
+    setSupports(sup);
+    setEstFrom(estimatedFromSec(curvePoints, sup, store.sport));
     setRemaining(store.candidates.length - store.analyzed);
   }
 
@@ -391,6 +415,31 @@ export default function SegmentHunter() {
       return true;
     });
   }, [scored, lenFilter, gradeFilter, feasFilter]);
+
+  /* KOM-/CR-Ziele als Overlay in der Kurven-Grafik: benoetigter Wert auf
+     der Bestzeit-Dauer, gold wenn in Reichweite */
+  const chartTargets = useMemo<TargetMark[]>(
+    () =>
+      scored
+        .filter(
+          (s) =>
+            s.feas != null &&
+            s.feas.need != null &&
+            s.feas.have != null &&
+            s.feas.status !== "kom" &&
+            s.komTime != null
+        )
+        .sort((a, b) => (b.feas?.ratio ?? 0) - (a.feas?.ratio ?? 0))
+        .slice(0, 8)
+        .map((s) => ({
+          name: s.name,
+          sec: s.komTime as number,
+          value: s.feas?.need as number,
+          have: s.feas?.have as number,
+          feasible: s.feas?.status === "attack",
+        })),
+    [scored]
+  );
 
   const fiveMin = sport === "ride" ? curveAt(curve, 300) : interpolateAt(curve, 300);
   const attackable = scored.filter(
@@ -687,7 +736,27 @@ export default function SegmentHunter() {
               >
                 {t.curveTitle(sport)}
               </h2>
-              <PowerCurve curve={curve} weight={weight} sport={sport} />
+              <PowerCurve
+                curve={curve}
+                weight={weight}
+                sport={sport}
+                supports={supports}
+                targets={chartTargets}
+                estimatedFrom={estFrom}
+              />
+              <h3
+                style={{
+                  ...display,
+                  fontSize: 13,
+                  letterSpacing: 0.8,
+                  margin: "14px 0 0",
+                  textTransform: "uppercase",
+                  color: T.faint,
+                }}
+              >
+                {t.supportsTitle}
+              </h3>
+              <CurveSupportTable supports={supports} sport={sport} weight={weight} />
             </section>
 
             {/* Hunt-Liste */}
@@ -1005,12 +1074,22 @@ function rankActivities(
   return [...recent, ...rest];
 }
 
+/** Herkunfts-Referenz fuer Kurven-Stuetzpunkte */
+function activityRef(activity: DetailedActivity): ActivityRef {
+  return {
+    id: activity.id,
+    name: activity.name,
+    date: activity.start_date_local.slice(0, 10),
+  };
+}
+
 /* Segment-Efforts und Kurvenpunkte aus einer Radaktivitaet einsammeln */
 function collectRideActivity(
   activity: DetailedActivity,
   segMap: Map<string, SegmentEntry>,
-  effortPoints: CurvePoint[]
+  effortPoints: TaggedPoint[]
 ) {
+  const ref = activityRef(activity);
   for (const effort of activity.segment_efforts ?? []) {
     const seg = effort.segment;
     if (!seg) continue;
@@ -1018,13 +1097,13 @@ function collectRideActivity(
     mergeSegmentEntry(segMap, effort, watts);
     // Effort als Kurvenpunkt (Untergrenze), falls plausible Watt vorliegen
     if (watts > 30 && effort.moving_time >= 30) {
-      effortPoints.push([Math.round(effort.moving_time), watts]);
+      effortPoints.push({ sec: Math.round(effort.moving_time), value: watts, activity: ref });
     }
   }
   // Gesamtaktivitaet als langer Kurvenpunkt
   const actWatts = Math.round(activity.weighted_average_watts || activity.average_watts || 0);
   if (actWatts > 30 && activity.moving_time >= 300) {
-    effortPoints.push([Math.round(activity.moving_time), actWatts]);
+    effortPoints.push({ sec: Math.round(activity.moving_time), value: actWatts, activity: ref });
   }
 }
 
@@ -1032,20 +1111,21 @@ function collectRideActivity(
 function collectRunActivity(
   activity: DetailedActivity,
   segMap: Map<string, SegmentEntry>,
-  runEfforts: Array<{ distance: number; moving_time: number }>
+  runEfforts: TaggedRunEffort[]
 ) {
+  const ref = activityRef(activity);
   for (const be of activity.best_efforts ?? []) {
-    runEfforts.push({ distance: be.distance, moving_time: be.moving_time });
+    runEfforts.push({ distance: be.distance, moving_time: be.moving_time, activity: ref });
   }
   for (const effort of activity.segment_efforts ?? []) {
     const seg = effort.segment;
     if (!seg) continue;
     mergeSegmentEntry(segMap, effort, 0);
-    runEfforts.push({ distance: seg.distance, moving_time: effort.moving_time });
+    runEfforts.push({ distance: seg.distance, moving_time: effort.moving_time, activity: ref });
   }
   // Gesamtlauf als langer Pace-Punkt
   if (activity.distance > 0 && activity.moving_time > 0) {
-    runEfforts.push({ distance: activity.distance, moving_time: activity.moving_time });
+    runEfforts.push({ distance: activity.distance, moving_time: activity.moving_time, activity: ref });
   }
 }
 

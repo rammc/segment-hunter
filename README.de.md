@@ -88,6 +88,13 @@ und ist mit Vitest getestet.
   mit Training machbar (0.85 bis 0.97) / ausser Reichweite.
 - **Datenqualitaet**: Efforts mit Watt < 30 oder Dauer < 30 s werden als
   geringe Datenqualitaet markiert und nicht gescored.
+- **Kurven-Grafik**: dargestellt wird die auf Eckpunkte ausgeduennte Kurve
+  (`displayCurve`), Marker nur auf den Standard-Dauern. Durchgezogen heisst
+  aus Watt-Streams gemessen, gestrichelt heisst geschaetzt (Effort-Fallback/
+  FTP-Anker beim Rad, Riegel-Extrapolation beim Laufen). KOM-/CR-Ziele
+  liegen als Punkte ueber der Kurve (gold = in Reichweite), und eine
+  Stuetzpunkt-Tabelle unter der Grafik verlinkt jeden Bestwert auf die
+  Strava-Aktivitaet, aus der er stammt (`curveSupports`/`speedSupports`).
 
 ## Repo-Struktur
 
